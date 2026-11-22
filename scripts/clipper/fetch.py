@@ -64,7 +64,7 @@ def _drop_parts() -> None:
     and if it is still locked, leave it (the next try writes its own)."""
     import gc
     gc.collect()
-    for part in INPUTS.glob("*.part"):
+    for part in [*INPUTS.glob("*.part"), *INPUTS.glob("*.ytdl")]:
         try:
             part.unlink(missing_ok=True)
         except OSError:
@@ -81,6 +81,7 @@ def download(url: str, minutes: float = 40) -> tuple[Path, str]:
         opts = _ydl_opts(INPUTS)
         if clients == "ffmpeg":
             opts["external_downloader"] = {"m3u8": "ffmpeg"}
+            opts["outtmpl"] = str(INPUTS / "%(extractor_key)s_%(id)s_ff.%(ext)s")
             clients = None
         elif clients:
             opts["extractor_args"] = {"youtube": {"player_client": clients}}
@@ -101,7 +102,7 @@ def download(url: str, minutes: float = 40) -> tuple[Path, str]:
                 path = Path(y.prepare_filename(info)).with_suffix(".mp4")
             break
         except yt_dlp.utils.DownloadError as e:
-            last_err = e
+            last_err = str(e)               # text only: the error object keeps the .part file open on Windows
             log(f"  that didn't work ({str(e).splitlines()[0][:90]}), trying another way…")
             _drop_parts()
     else:
@@ -119,7 +120,7 @@ def download(url: str, minutes: float = 40) -> tuple[Path, str]:
                     path = Path(y.prepare_filename(info)).with_suffix(".mp4")
                 return path, info.get("title") or info.get("id") or "stream"
             except yt_dlp.utils.DownloadError as e:
-                last_err = e
+                last_err = str(e)
             token = os.environ.get("APIFY_TOKEN") or (setting("apify_token") or "")
             if token:
                 return _paid_youtube(url, token), "stream"
@@ -128,7 +129,7 @@ def download(url: str, minutes: float = 40) -> tuple[Path, str]:
                          "Paid backup for YouTube (optional): get a token at apify.com and say "
                          "'set my Apify token to …', then run this again.")
     if not path.exists():                   # the merger may have kept another container
-        cands = sorted(INPUTS.glob(f"*_{info.get('id')}.*"), key=lambda p: p.stat().st_mtime)
+        cands = sorted(INPUTS.glob(f"*_{info.get('id')}*.*"), key=lambda p: p.stat().st_mtime)
         cands = [c for c in cands if c.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov")]
         if not cands:
             raise SystemExit("The download finished but no video file was written. Try another link.")
