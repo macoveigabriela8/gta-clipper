@@ -235,9 +235,13 @@ def check(mp4: Path, want_s: float, max_s: float | None = None, ctx: dict | None
             f"The webcam jumps at {', '.join(f'{c:.1f} s' for c in cuts)}: another streamer's clip or a zoom starts "
             "inside the Short. Stay inside one clip (end before it, or start after it)." if cuts else "")
 
+    main_dur = float((ctx.get("replay") or {}).get("main_s") or dur)   # a..b part only (format 5 adds a replay after it)
     if not ctx.get("top5"):                  # a Top 5 is five moments: it gets per-piece checks instead (top5.py)
-        checks += _cut_checks(ctx, dur)
-    checks += zoom.checks(mp4, ctx, dur)        # format 4 (reaction zoom) only
+        checks += _cut_checks(ctx, main_dur)
+    checks += zoom.checks(mp4, ctx, main_dur)   # format 4 (reaction zoom) only
+    if ctx.get("replay"):                    # format 5: the replay's own checks (replay.py)
+        from . import replay
+        checks += replay.checks(mp4, ctx["replay"])
     ok = all(c["pass"] for c in checks if c["level"] == "fail")
     notes = [("✗ " if c["level"] == "fail" else "! ") + c["say"] for c in checks if not c["pass"] and c["say"]]
     return ok, notes, measured, checks

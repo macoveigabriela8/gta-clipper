@@ -23,9 +23,10 @@ This skill's folder is the one holding this SKILL.md (normally `~/.claude/skills
    If `uv run --python 3.12` fails on Windows with a link/shortcut error, run `uv python find 3.12` and pass that
    full python.exe path to `--python` instead (some Windows Servers break uv's Python shortcut).
 2. `gc setup` — installs the libraries and downloads the speech model once (about 1-2 minutes). Wait for "Ready".
-   Then SHOW the user the 3 kinds: `gc formats` opens `assets/formats.jpg` (real frames of each kind, side by
+   Then SHOW the user the 5 kinds: `gc formats` opens `assets/formats.jpg` (real frames of each kind, side by
    side) on their screen; also give its path as a link. Say with it: "This is what I can make: 1 streamer moments (face on top,
-   game below), 2 full gameplay (when there's no webcam), 3 a Top 5 countdown. I'll pick what fits your stream."
+   game below), 2 full gameplay (when there's no webcam), 3 a Top 5 countdown, 4 a reaction zoom (his face fills the
+   screen at the punchline), 5 an instant replay (the payoff again in slow motion). I'll pick what fits your stream."
 3. `gc get "<link or file>"` — downloads the video (long streams: the first 40 min; `--minutes 90` for more), listens
    to it and writes `scan/chunk_*.md` in a new project under `~/GTAClipper/projects/`.
 4. Read `reference/cutting-sop.md` (the cutting rules and the QA), then every chunk file. Lines marked 🔥🔥 / 🔥
@@ -39,6 +40,10 @@ This skill's folder is the one holding this SKILL.md (normally `~/.claude/skills
    webcam (found: face on top; none: full gameplay), and with 5+ decent moments add one Top 5 countdown: "I found
    7 moments. I'll make the best 3 as Shorts plus one Top 5 countdown. Go, or just the best one?" The user can
    still say "only the Top 5" or "full gameplay". Top 5 rules and its plan shape: `reference/cutting-sop.md` § 7.
+   Per moment, one extra at most (say it in the same line, e.g. "#2 with a reaction zoom"): **reaction zoom**
+   `"zoom": true` when the streamer's face IS the punchline (a scream, laugh or stunned stare right at the payoff;
+   needs a webcam; drop it if `zoom_sharp` warns or the face looks mushy) · **instant replay** `"replay": true` when
+   the payoff is fast and visual (a crash, a fall, a shot; not a line of words). Both need `"payoff_at"`. § 8 / § 9.
    Then write the chosen ones into the project's `plan.json` under `"moments"`:
    `{"a": 401, "b": 435, "hook": "He just paid 25K for this truck", "caption": "Never complain out loud #gtarp",
    "payoff": "the truck flips into the river", "payoff_at": 432.5}`

@@ -151,3 +151,37 @@ not cut off, not a blurry mess, captions low (on the chin / chest), not over the
 | `zoom_face` | The cam box misses the face: give `"cam"` by hand (the whole webcam), make it again. Still failing: remove `"zoom"`. |
 | `zoom_sharp` (!) or a mushy face on the QA sheet | Remove `"zoom"` from that moment rather than ship a blurry face. |
 | `zoom` (!) | Read the note: add `"payoff_at"`, end 1-3 s after it, or remove `"zoom"` (no webcam). |
+
+## 9. Instant replay (the payoff again, slowed, after the Short)
+
+Pick it when the payoff is **fast and visual**: a crash, a fall, a shot, a sudden scare. A viewer wants to see it
+again, and half speed shows what they missed. Skip it for payoffs that are mostly words (a joke, a line): words at
+half speed sound wrong. Add `"replay": true` to the moment. Nothing else changes: `"payoff_at"` is required, and
+`"b"` still ends 1-3 s after the payoff. The replay comes after `"b"`.
+What `gc make` adds: the stream from `payoff_at - 1.0` to `payoff_at + 0.5`, played at half speed (3 s, the sound
+slowed too, pitch kept). The gameplay is zoomed 1.2x around its centre. The webcam band, the game crop and the
+cut-off bottom are exactly the main part's. A black "REPLAY" pill (the hook's style) stays the whole 3 s, with no
+captions. Then one hard cut joins it to the main part, and the loudness, cover and QA run on the joined Short.
+
+| Rule | Why | QA check |
+|---|---|---|
+| `payoff_at` inside the moment, 1 s or more after `"a"` and 0.5 s or more before `"b"`. | Without it there's no replay, or a cut-short one. | ✗ `replay_length` (2.5-4 s) |
+| The replay shows the payoff itself. | A replay of the wrong second is a bug, not an edit. | ✗ `replay_matches` (the frame half-way through the replay vs the stream at that second, cropped the same way: difference ≤ 0.03, and smaller than unzoomed, which proves the zoom) |
+| The REPLAY pill is on screen. | Without it, the replay reads as a glitch that repeats. | ✗ `replay_badge` (70%+ of the pill's pixels match half-way through) |
+| Main part + replay = the file's length. | A broken join. | ✗ `length` (the real lengths of both parts) |
+
+The single-moment checks (`payoff`, `link_end`, `clean_*`, `talking`) judge the main part only: they use `"a"` / `"b"`,
+not the replay. Every § 4 file check runs on the joined Short.
+
+**Eye check:** the last row of `<name>_qa.jpg` is the REPLAY row (each frame labelled with its stream second). The
+payoff is visible and bigger than in the END frames above it, the pill is readable, the webcam band looks the same
+as in the main part (no jump), and there are no captions.
+
+| Fails | Fix |
+|---|---|
+| `replay_length` | Set `"payoff_at"` to the real second (look at the QA sheet), or move `"a"` / `"b"` so it sits 1 s after `"a"` and 0.5 s before `"b"`. |
+| `replay_matches` | Check `"payoff_at"` first, then make it again (a broken render). |
+| `replay_badge` | Make it again; still failing = look at the REPLAY row on the QA sheet. |
+| A slowed line sounds odd (eye/ear check) | Drop `"replay"` on that moment: its payoff is words, not action. |
+
+One extra per moment: `"zoom"` or `"replay"`, not both (the replay is cut from the plain layout).

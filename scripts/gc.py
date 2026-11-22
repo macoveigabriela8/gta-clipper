@@ -19,7 +19,7 @@
   gc get <link or file>            download, listen, write scan/chunk_*.md      [--minutes 40]
   gc look <video> --from 6:40 --to 7:16 [--every 2]    contact sheet of that window
   gc make [project] [--no-open]    render every moment in plan.json, open the review page
-  gc formats [--no-open]           open a picture of the 3 kinds of Short (shown to the user after setup)
+  gc formats [--no-open]           open a picture of the 5 kinds of Short (shown to the user after setup)
   gc review [day]                  rebuild and open the review page of a day
 
 Run it as: uv run --python 3.12 <skill folder>/scripts/gc.py <command>
@@ -304,10 +304,10 @@ def cmd_make(a) -> int:
 
 
 def cmd_formats(a) -> int:
-    out = paths.SKILL_DIR / "assets" / "formats.jpg"          # real frames of the 3 kinds, shipped with the skill
+    out = paths.SKILL_DIR / "assets" / "formats.jpg"          # real frames of the 5 kinds, shipped with the skill
     if not out.is_file():
         raise SystemExit(f"The formats picture is missing ({out}). Reinstall the skill.")
-    log(f"✓ the 3 kinds of Short, side by side (real frames): {out}")
+    log(f"✓ the 5 kinds of Short, side by side (real frames): {out}")
     if not a.no_open:
         paths.open_path(out)
     return 0
@@ -341,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
     mk = sub.add_parser("make", help="render every moment of a project's plan.json")
     mk.add_argument("project", nargs="?", help="project folder or name (newest when left out)")
     mk.add_argument("--no-open", action="store_true", help="don't open the review page")
-    fm = sub.add_parser("formats", help="open a picture of the 3 kinds of Short (to show the user)")
+    fm = sub.add_parser("formats", help="open a picture of the 5 kinds of Short (to show the user)")
     fm.add_argument("--no-open", action="store_true", help="only write the picture")
     rv = sub.add_parser("review", help="rebuild and open the review page")
     rv.add_argument("day", nargs="?", help="YYYY-MM-DD (today when left out)")
