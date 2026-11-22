@@ -1,7 +1,7 @@
 """Top 5 countdown: five short moments of one stream in a single Short, worst (#5) first, best (#1) last.
 Every piece is an ordinary Short made by render.build_short, whose black pill reads "#3 LABEL" for the whole
-piece (the first piece also carries the hook above it). The five pieces are joined with one re-encode, levelled,
-then checked like any Short plus the countdown's own rules (reference/cutting-sop.md § 7)."""
+piece (the first piece also carries the hook above it). The five pieces are joined with one re-encode, a generated
+whoosh on each rank change, levelled, then checked like any Short plus the countdown's own rules (reference/cutting-sop.md § 7)."""
 from __future__ import annotations
 
 import tempfile
@@ -19,6 +19,8 @@ PIECE_S = (3.0, 10.0)       # every piece lasts this long
 PAYOFF_AFTER = (0.3, 3.0)   # a piece ends this long after its payoff
 APART_S = 1.0               # pieces never share seconds of the video: at least this gap between two
 PILL_MATCH = 0.7            # share of the pill's pixels that must look like the pill on the finished Short
+WHOOSH_UNDER = (8.0, 10.0)  # the whoosh at each rank change sits this many dB under the game (aim: the middle)
+WHOOSH_RISE, WHOOSH_FALL = 0.15, 0.3   # it swells for 0.15 s, is loudest right on the cut, then dies in 0.3 s
 
 
 def pill_text(rank: int, label: str, hook: str = "") -> str:
@@ -26,13 +28,30 @@ def pill_text(rank: int, label: str, hook: str = "") -> str:
     return f"{hook}\n{tag}" if hook else tag
 
 
-def _join(pieces: list[Path], out: Path) -> None:
-    """The finished pieces back to back (hard cuts), one re-encode with the same settings as a normal Short."""
+def whoosh_track(cuts: list[float], length: float, out: Path, gain_db: float = 0.0) -> Path:
+    """One sound track holding a whoosh on every cut, generated here (noise shaped into a quick swell and
+    band-limited so it reads as rushing air), so there's no sound file to license."""
+    swells = "+".join(
+        f"between(t,{c - WHOOSH_RISE:.3f},{c + WHOOSH_FALL:.3f})*pow(if(lt(t,{c:.3f}),"
+        f"(t-{c - WHOOSH_RISE:.3f})/{WHOOSH_RISE},({c + WHOOSH_FALL:.3f}-t)/{WHOOSH_FALL}),2)" for c in cuts) or "0"
+    run([ffmpeg(), "-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i",
+         f"aevalsrc='(2*random(0)-1)*({swells})':s=48000:d={length:.3f}",
+         "-af", f"highpass=f=250,lowpass=f=4500,volume={gain_db:.2f}dB", "-ac", "2", "-ar", "48000", str(out)])
+    return out
+
+
+def _join(pieces: list[Path], out: Path, whoosh: Path | None = None) -> None:
+    """The finished pieces back to back (hard cuts), one re-encode with the same settings as a normal Short.
+    The whoosh track is added on top as is (amerge + pan: a plain sum, no level change to the game)."""
     cmd = [ffmpeg(), "-hide_banner", "-nostdin", "-y"]
     for p in pieces:
         cmd += ["-i", str(p)]
     n = len(pieces)
     graph = "".join(f"[{i}:v][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
+    if whoosh:
+        cmd += ["-i", str(whoosh)]
+        graph = (graph.replace("[v][a]", "[v][game]") +
+                 f";[game][{n}:a]amerge=inputs=2,pan=stereo|c0=c0+c2|c1=c1+c3[a]")
     cmd += ["-filter_complex", graph, "-map", "[v]", "-map", "[a]", "-r", str(FPS), "-c:v", "libx264",
             "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-profile:v", "high", "-c:a", "aac",
             "-b:a", "160k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", str(out)]
@@ -56,7 +75,7 @@ def _pill_shows(mp4: Path, piece: dict, work: Path) -> float:
 
 
 def checks(items: list[dict], pieces: list[dict], words: list[dict], hook: str, total: float,
-           mp4: Path, work: Path) -> list[dict]:
+           mp4: Path, work: Path, whoosh: dict | None = None) -> list[dict]:
     """The countdown's own rules, in qc.py's shape."""
     out: list[dict] = []
     add = lambda cid, level, ok, say: out.append({"check": cid, "level": level, "pass": bool(ok), "say": say})
@@ -112,6 +131,14 @@ def checks(items: list[dict], pieces: list[dict], words: list[dict], hook: str, 
                 cut.append(f"#{p['rank']} (\"{str(w.get('w', '')).strip()}\")")
                 break
     add("item_edges", "warn", not cut, "A word is cut in half at the edge of " + ", ".join(cut) + ".")
+
+    if whoosh is not None:
+        under, n = whoosh.get("under"), whoosh.get("n", 0)
+        good = n == len(pieces) - 1 and under is not None and WHOOSH_UNDER[0] <= under <= WHOOSH_UNDER[1]
+        add("whoosh", "warn", good,
+            "No whoosh in the mix." if under is None else
+            f"{n} whooshes for {len(pieces) - 1} rank changes, {under:.1f} dB under the game "
+            f"(want one per change, {WHOOSH_UNDER[0]:.0f}-{WHOOSH_UNDER[1]:.0f} dB under).")
 
     hw = hook.split()
     plain = 3 <= len(hw) <= 8 and "#" not in hook and not any(ord(c) >= 0x2600 and c != "…" for c in hook)
@@ -172,7 +199,19 @@ def build(video: Path, plan: dict, words: list[dict], cam_for, out_dir: Path) ->
                                "text": text, "mp4": made["mp4"], "cam_say": cam_say,
                                "cam": render.fit_cam(cam, src["w"], src["h"]) is not None})
                 t += d
-            _join([Path(p["mp4"]) for p in pieces], mp4)
+            # the whoosh: measured against the pieces' own loudness, then set WHOOSH_UNDER's middle below it
+            heard = [x for x in (render._loudness_of(Path(p["mp4"]))[0] for p in pieces) if x is not None and x > -60]
+            game = sum(heard) / len(heard) if heard else -14.0
+            cuts = [p["t0"] for p in pieces[1:]]
+            wav = whoosh_track(cuts, t + 0.5, work / "whoosh.wav")
+            raw = render._loudness_of(wav)[0]
+            if raw is not None and raw > -70:
+                whoosh_track(cuts, t + 0.5, wav, max(-40.0, min(20.0, game - sum(WHOOSH_UNDER) / 2 - raw)))
+                level = render._loudness_of(wav)[0]
+            else:
+                level = None
+            whoosh = {"n": len(cuts) if level is not None else 0, "under": None if level is None else game - level}
+            _join([Path(p["mp4"]) for p in pieces], mp4, wav if level is not None else None)
             level = render._settle_loudness(mp4)
             if level:
                 notes.append(level)
@@ -181,7 +220,7 @@ def build(video: Path, plan: dict, words: list[dict], cam_for, out_dir: Path) ->
             if any(p["cam"] for p in pieces):
                 bad = [f"#{p['rank']}: {p['cam_say'][0]}" for p in pieces if p["cam"] and p["cam_say"]]
                 found.append({"check": "webcam", "level": "fail", "pass": not bad, "say": " ".join(bad)})
-            found += checks(items, pieces, words, hook, video_info(mp4)["dur"], mp4, work)
+            found += checks(items, pieces, words, hook, video_info(mp4)["dur"], mp4, work, whoosh)
         ok = all(c["pass"] for c in found if c["level"] == "fail")
         notes += [("✗ " if c["level"] == "fail" else "! ") + c["say"] for c in found if not c["pass"] and c["say"]]
         result.update(ok=ok, qa=found, seconds=round(t, 2), lufs=measured.get("lufs"),

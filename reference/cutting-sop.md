@@ -90,7 +90,8 @@ Offer it only when the stream has 5+ decent moments. Plan shape (next to `"momen
 `{"rank": 5, "a": 122, "b": 129, "label": "Granny's new boy toy", "payoff_at": 128.4}, ... ]}`
 (`"cam"` / `"facecam"` / `"drop_bottom"` per item as for moments; `"cam"` on `top5` = for every item.)
 Each piece is made like a normal Short; its pill reads "#3 LABEL" for the whole piece (piece #5 also shows the hook
-on the line above). The five are joined into `top5_<hook>.mp4`, levelled, and checked.
+on the line above). The five are joined into `top5_<hook>.mp4` with a short whoosh on every rank change (generated
+by ffmpeg from noise, so nothing to license; 9 dB under the game, loudest right on the cut), levelled, and checked.
 
 | Rule | Why | QA check |
 |---|---|---|
@@ -105,8 +106,8 @@ on the line above). The five are joined into `top5_<hook>.mp4`, levelled, and ch
 
 Automatic checks on the joined Short: every § 4 file check (plays, length, size, sound, loudness, peak, silence,
 black, frozen, no_double_captions, bright_enough, shorts_length), plus `badge_visible` ✗ (one frame half-way
-through each piece: the rank pill is really there, 70%+ of its pixels match) and `webcam` ✗ judged per piece (each
-piece has its own cam crop). The single-moment checks (payoff, link_end, clean_*, talking, one_clip) are replaced by
+through each piece: the rank pill is really there, 70%+ of its pixels match), `webcam` ✗ judged per piece (each
+piece has its own cam crop) and `whoosh` ! (one per rank change, 8-10 dB under the game, measured). The single-moment checks (payoff, link_end, clean_*, talking, one_clip) are replaced by
 the per-piece ones above.
 
 **Eye check:** read `top5_<hook>_qa.jpg` (row 1 = first frame of #5..#1, row 2 = last frame): the pill readable in
@@ -120,3 +121,4 @@ every frame, the real webcam on top, one set of captions, each last frame on its
 | `badge_visible` | Look at the QA sheet; usually a broken render: make it again. |
 | `webcam` (#N) | Give `"cam"` by hand on item #N (or `"facecam": false`). |
 | `item_edges` (!) | Move that edge into the gap between two words. |
+| `whoosh` (!) | Make it again; still off = the pieces are near-silent (pick louder moments). |
