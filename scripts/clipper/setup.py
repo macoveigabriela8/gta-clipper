@@ -21,7 +21,13 @@ def _free_gb() -> float:
 def _imports(module: str) -> str:
     """'' when the module imports fine, else the last error line. Each check runs in its own Python, so OpenCV
     and PyAV (both carry an ffmpeg) never load into the same process just for a check."""
-    code = f"import sys; sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r}); import {module}"
+    # On Windows the speech engine needs Microsoft's C++ runtime from the msvc-runtime package: point the check at it
+    # the way hearing._windows_runtime() does for real listening, or setup says "not ready" on a PC that works.
+    dlls = ("import os\nif os.name == 'nt':\n    for d in {sys.prefix, os.path.join(sys.prefix, 'Scripts'), "
+            "sys.base_prefix}:\n        if os.path.isdir(d):\n            os.add_dll_directory(d)\n"
+            "            os.environ['PATH'] = d + os.pathsep + os.environ.get('PATH', '')\n")
+    code = (f"import sys\n{dlls}sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+            f"import {module}")
     try:
         p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=120)

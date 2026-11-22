@@ -35,6 +35,21 @@ def _ydl_opts(out_dir: Path) -> dict:
 
 # YouTube sometimes answers 403 / "confirm you're not a bot" to one player and not to another: try them in turn.
 _YT_CLIENTS = [None, ["tv", "web_safari"], ["mweb"], ["web_embedded"], ["android_vr"]]
+# Other sites: yt-dlp's own stream stitcher first; some Twitch VODs break it ("Initialization fragment found after
+# media fragments"), and ffmpeg reads those fine.
+_OTHER_TRIES = [None, "ffmpeg"]
+
+
+def _drop_parts() -> None:
+    """Remove half-downloaded files before the next try. Windows may still hold one open for a moment: let go of it,
+    and if it is still locked, leave it (the next try writes its own)."""
+    import gc
+    gc.collect()
+    for part in INPUTS.glob("*.part"):
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def download(url: str, minutes: float = 40) -> tuple[Path, str]:
@@ -42,9 +57,12 @@ def download(url: str, minutes: float = 40) -> tuple[Path, str]:
     INPUTS.mkdir(parents=True, exist_ok=True)
     is_yt = "youtu" in url.lower()
     last_err = None
-    for clients in (_YT_CLIENTS if is_yt else [None]):
+    for clients in (_YT_CLIENTS if is_yt else _OTHER_TRIES):
         opts = _ydl_opts(INPUTS)
-        if clients:
+        if clients == "ffmpeg":
+            opts["external_downloader"] = {"m3u8": "ffmpeg"}
+            clients = None
+        elif clients:
             opts["extractor_args"] = {"youtube": {"player_client": clients}}
         try:
             with yt_dlp.YoutubeDL(opts) as y:
@@ -65,8 +83,7 @@ def download(url: str, minutes: float = 40) -> tuple[Path, str]:
         except yt_dlp.utils.DownloadError as e:
             last_err = e
             log(f"  that didn't work ({str(e).splitlines()[0][:90]}), trying another way…")
-            for part in INPUTS.glob("*.part"):
-                part.unlink(missing_ok=True)
+            _drop_parts()
     else:
         if is_yt:                              # rate limits usually clear in seconds: one calm retry, then paid
             log("  YouTube is limiting downloads right now: waiting 20 s and trying once more…")
