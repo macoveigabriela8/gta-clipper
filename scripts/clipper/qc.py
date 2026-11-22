@@ -236,7 +236,10 @@ def check(mp4: Path, want_s: float, max_s: float | None = None, ctx: dict | None
             "inside the Short. Stay inside one clip (end before it, or start after it)." if cuts else "")
 
     if not ctx.get("top5"):                  # a Top 5 is five moments: it gets per-piece checks instead (top5.py)
-        checks += _cut_checks(ctx, dur)
+        checks += _cut_checks(ctx, float((ctx.get("replay") or {}).get("main_s") or dur))   # a..b = the main part
+    if ctx.get("replay"):                    # format 5: the replay's own checks (replay.py)
+        from . import replay
+        checks += replay.checks(mp4, ctx["replay"])
     ok = all(c["pass"] for c in checks if c["level"] == "fail")
     notes = [("✗ " if c["level"] == "fail" else "! ") + c["say"] for c in checks if not c["pass"] and c["say"]]
     return ok, notes, measured, checks

@@ -350,6 +350,7 @@ def _keep_share(video: Path, a: float, b: float, words: list[dict], cam: dict | 
 def build_short(video: Path, a: float, b: float, hook: str, caption: str, words: list[dict], cam: dict | None,
                 out_dir: Path, name: str, moment: dict | None = None) -> dict:
     """Render one Short. Writes out_dir/name.mp4, .jpg (cover), .txt (post text) and .json (this result)."""
+    from . import replay                                    # (here, not at the top: replay.py imports render)
     video, out_dir = Path(video), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     mp4, jpg, txt, js = (out_dir / f"{name}{ext}" for ext in (".mp4", ".jpg", ".txt", ".json"))
@@ -386,8 +387,11 @@ def build_short(video: Path, a: float, b: float, hook: str, caption: str, words:
         if keep_note:
             notes.append(keep_note)
         result["keep"] = keep
+        rep = None                                          # format 5: the payoff again, slowed (replay.py)
         with tempfile.TemporaryDirectory(prefix="gtaclip-") as tmp:
             made = _render(video, a, b, hook, words, cam, info, mp4, Path(tmp), keep, (moment or {}).get("hook_hold"))
+            if (moment or {}).get("replay"):
+                rep = replay.add(video, mp4, a, b, moment, cam, info, keep, Path(tmp))
         if cam and not made["cam"]:
             notes.append("The facecam box didn't fit the video, so the gameplay fills the whole height.")
         if info["has_audio"]:
@@ -397,14 +401,17 @@ def build_short(video: Path, a: float, b: float, hook: str, caption: str, words:
         _cover(mp4, jpg, min(COVER_AT, (b - a) / 2))
         ctx = {"a": a, "b": b, "words": words, "hook": hook, "cam": bool(made["cam"]), "source_dur": info["dur"],
                "moment": moment or {}, "silence_problem": silence_problem,
-               "cuts": [c for c in cuts if a + 0.3 < c < b - 0.3], "cuts_on_cam": cuts_on_cam}
-        ok, qc_notes, measured, checks = qc.check(mp4, b - a, setting("max_short_s"), ctx)
+               "cuts": [c for c in cuts if a + 0.3 < c < b - 0.3], "cuts_on_cam": cuts_on_cam, "replay": rep}
+        want = b - a if rep is None else rep["main_s"] + rep.get("replay_s", 0.0)   # real lengths of both parts
+        result["seconds"] = round(want, 2)
+        ok, qc_notes, measured, checks = qc.check(mp4, want, setting("max_short_s"), ctx)
         notes.extend(qc_notes)
         result["ok"] = ok
         result["qa"] = checks
-        result["qa_sheet"] = str(qc.qa_sheet(mp4, out_dir / f"{name}_qa.jpg", b - a, a))
+        sheet = out_dir / f"{name}_qa.jpg"
+        result["qa_sheet"] = str(replay.qa_sheet(mp4, sheet, rep) if rep else qc.qa_sheet(mp4, sheet, b - a, a))
         passed = sum(1 for c in checks if c["pass"])
-        log(f"  {name}: {b - a:.1f} s, {measured.get('lufs')} LUFS · QA {passed}/{len(checks)} checks passed · "
+        log(f"  {name}: {want:.1f} s, {measured.get('lufs')} LUFS · QA {passed}/{len(checks)} checks passed · "
             f"{'ok' if ok else 'NEEDS A LOOK'} ({time.time() - t_start:.0f} s to make)")
     except Exception as e:                                  # one bad moment must not stop the others
         notes.append(f"Couldn't make this Short: {e}")
