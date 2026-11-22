@@ -1,0 +1,203 @@
+"""Turning one moment of a video into a finished vertical Short (1080 x 1920, 30 fps): facecam band on top,
+gameplay below, black hook pill first, word-by-word captions on the seam, loudness-normalised sound.
+Entry point: build_short()."""
+from __future__ import annotations
+
+import tempfile
+import time
+from pathlib import Path
+
+from . import overlays, qc
+from .frames import video_info
+from .paths import FPS, H, W, ffmpeg, log, run, save, setting
+
+CAM_H = 740                       # facecam band at the top
+GAME_H = H - CAM_H                # gameplay underneath: 1080 x 1180
+CAPTION_Y_NO_CAM = 0.62           # caption centre as a share of the height when there's no facecam
+FADE = 0.05                       # sound fade in / out (s)
+HOOK_FADE = 0.2                   # the pill fades out over its last 0.2 s
+COVER_AT = 0.5
+
+
+def _even(v: float) -> int:
+    return max(2, int(v) // 2 * 2)
+
+
+def fit_cam(cam: dict | None, sw: int, sh: int) -> dict | None:
+    """The cam box (source pixels) reshaped to the band's 1080:740 shape without stretching: grow it a little
+    when it's close, otherwise trim the long side. None when the box is unusable."""
+    if not cam:
+        return None
+    try:
+        x, y, w, h = (float(cam[k]) for k in ("x", "y", "w", "h"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    x, y = max(0.0, min(x, sw - 2)), max(0.0, min(y, sh - 2))
+    w, h = min(w, sw - x), min(h, sh - y)
+    if w < 32 or h < 32:
+        return None
+    aspect = W / CAM_H
+    cx, cy = x + w / 2, y + h / 2
+    if w / h < aspect:
+        grown = h * aspect
+        if grown / w <= 1.15 and grown <= sw:
+            w = grown
+        else:
+            h = w / aspect
+    else:
+        grown = w / aspect
+        if grown / h <= 1.15 and grown <= sh:
+            h = grown
+        else:
+            w = h * aspect
+    w, h = _even(min(w, sw)), _even(min(h, sh))
+    x0 = _even(min(max(0.0, cx - w / 2), sw - w))
+    y0 = _even(min(max(0.0, cy - h / 2), sh - h))
+    return {"x": x0, "y": y0, "w": w, "h": h}
+
+
+def cover_box(sw: int, sh: int, tw: int, th: int, avoid: dict | None = None) -> dict:
+    """The biggest tw:th window of a sw x sh frame, centred; moved off the facecam when one is given."""
+    target = tw / th
+    if sw / sh > target:
+        ch, cw = sh, sh * target
+    else:
+        cw, ch = sw, sw / target
+    cw, ch = _even(cw), _even(ch)
+    x0, y0 = (sw - cw) / 2, (sh - ch) / 2
+    if avoid:                                         # (with a small margin: webcam frames have borders)
+        mx, my = 0.02 * sw, 0.02 * sh
+        ax0, ay0 = avoid["x"] - mx, avoid["y"] - my
+        ax1, ay1 = avoid["x"] + avoid["w"] + mx, avoid["y"] + avoid["h"] + my
+        if cw < sw:                                   # wide source: slide sideways, away from the cam
+            if (ax0 + ax1) / 2 < sw / 2:
+                if ax1 > x0:
+                    x0 = min(ax1, sw - cw)
+            elif ax0 < x0 + cw:
+                x0 = max(ax0 - cw, 0)
+        elif ch < sh:                                 # tall source: slide up or down instead
+            if (ay0 + ay1) / 2 < sh / 2:
+                if ay1 > y0:
+                    y0 = min(ay1, sh - ch)
+            elif ay0 < y0 + ch:
+                y0 = max(ay0 - ch, 0)
+    return {"x": _even(x0), "y": _even(y0), "w": cw, "h": ch}
+
+
+def _post_text(hook: str, caption: str) -> str:
+    tags = str(setting("hashtags") or "").split()
+    have = {t.lower() for t in str(caption).split() if t.startswith("#")}
+    tags = [t for t in tags if t.lower() not in have]
+    parts = [str(hook).strip(), str(caption).strip(), " ".join(tags)]
+    return "\n\n".join(p for p in parts if p) + "\n"
+
+
+def _graph(sw: int, sh: int, cam: dict | None, cam_raw: dict | None, dur: float, cap_input: int | None,
+           hook_input: int, hook_xy: tuple[int, int], hook_s: float, audio_src: str, normalise: bool) -> str:
+    f = []
+    if cam:
+        g = cover_box(sw, sh, W, GAME_H, avoid=cam_raw)
+        f.append(f"[0:v]fps={FPS},split=2[s1][s2]")
+        f.append(f"[s1]crop={cam['w']}:{cam['h']}:{cam['x']}:{cam['y']},scale={W}:{CAM_H}:flags=bicubic,setsar=1[top]")
+        f.append(f"[s2]crop={g['w']}:{g['h']}:{g['x']}:{g['y']},scale={W}:{GAME_H}:flags=bicubic,setsar=1[bot]")
+        f.append("[top][bot]vstack=inputs=2[base]")
+        cap_mid = CAM_H
+    else:
+        g = cover_box(sw, sh, W, H)
+        f.append(f"[0:v]fps={FPS},crop={g['w']}:{g['h']}:{g['x']}:{g['y']},scale={W}:{H}:flags=bicubic,setsar=1[base]")
+        cap_mid = round(H * CAPTION_Y_NO_CAM)
+    last = "base"
+    if cap_input is not None:
+        cap_y = cap_mid - overlays.CAP_BAND_H // 2
+        f.append(f"[{cap_input}:v]format=rgba[cap]")
+        f.append(f"[{last}][cap]overlay=0:{cap_y}:eof_action=pass[withcap]")
+        last = "withcap"
+    fade_at = max(0.0, hook_s - HOOK_FADE)
+    f.append(f"[{hook_input}:v]format=rgba,fade=t=out:st={fade_at:.3f}:d={HOOK_FADE}:alpha=1[hook]")
+    f.append(f"[{last}][hook]overlay={hook_xy[0]}:{hook_xy[1]}:eof_action=pass,format=yuv420p[vout]")
+    audio = f"[{audio_src}]aresample=48000"
+    if normalise:
+        audio += ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"
+    audio += (f",apad,atrim=0:{dur:.3f},afade=t=in:st=0:d={FADE},"
+              f"afade=t=out:st={max(0.0, dur - FADE):.3f}:d={FADE}[aout]")
+    f.append(audio)
+    return ";".join(f)
+
+
+def _render(video: Path, a: float, b: float, hook: str, words: list[dict], cam_raw: dict | None, info: dict,
+            mp4: Path, work: Path) -> dict:
+    dur = b - a
+    sw, sh = info["w"], info["h"]
+    cam = fit_cam(cam_raw, sw, sh)
+    hook_s = min(float(setting("hook_seconds") or 3.0), dur)
+    hook_png, hx, hy = overlays.hook_png(hook, work / "hook.png")
+    cap_list = overlays.caption_track(words, a, b, work)
+
+    cmd = [ffmpeg(), "-hide_banner", "-nostdin", "-y", "-ss", f"{a:.3f}", "-t", f"{dur:.3f}", "-i", str(video)]
+    idx = 1
+    cap_input = None
+    if cap_list:
+        cmd += ["-f", "concat", "-safe", "0", "-i", str(cap_list)]
+        cap_input, idx = idx, idx + 1
+    cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{hook_s:.3f}", "-i", str(hook_png)]
+    hook_input, idx = idx, idx + 1
+    if info["has_audio"]:
+        audio_src, normalise = "0:a", True
+    else:
+        cmd += ["-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
+        audio_src, normalise = f"{idx}:a", False
+        idx += 1
+    avoid = {k: float(cam_raw[k]) for k in ("x", "y", "w", "h")} if cam else None
+    graph = _graph(sw, sh, cam, avoid, dur, cap_input, hook_input, (hx, hy), hook_s, audio_src, normalise)
+    cmd += ["-filter_complex", graph, "-map", "[vout]", "-map", "[aout]", "-t", f"{dur:.3f}",
+            "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+            "-profile:v", "high", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+            "-movflags", "+faststart", str(mp4)]
+    run(cmd)
+    return {"cam": cam, "captions": bool(cap_list)}
+
+
+def _cover(mp4: Path, jpg: Path, at: float) -> None:
+    run([ffmpeg(), "-hide_banner", "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", str(mp4), "-frames:v", "1",
+         "-q:v", "2", str(jpg)])
+
+
+def build_short(video: Path, a: float, b: float, hook: str, caption: str, words: list[dict], cam: dict | None,
+                out_dir: Path, name: str) -> dict:
+    """Render one Short. Writes out_dir/name.mp4, .jpg (cover), .txt (post text) and .json (this result)."""
+    video, out_dir = Path(video), Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    mp4, jpg, txt, js = (out_dir / f"{name}{ext}" for ext in (".mp4", ".jpg", ".txt", ".json"))
+    notes: list[str] = []
+    result = {"mp4": str(mp4), "cover": str(jpg), "txt": str(txt), "seconds": round(float(b) - float(a), 2),
+              "ok": False, "notes": notes}
+    t_start = time.time()
+    try:
+        txt.write_text(_post_text(hook, caption), encoding="utf-8")
+        info = video_info(video)
+        if not info["w"] or not info["h"]:
+            raise RuntimeError(f"can't read the video {video.name}")
+        a, b = max(0.0, float(a)), float(b)
+        if info["dur"] and b > info["dur"]:
+            notes.append(f"The end was past the video's end; cut at {info['dur']:.1f} s.")
+            b = info["dur"]
+        if b - a < 1.0:
+            raise RuntimeError(f"the moment is too short ({b - a:.1f} s)")
+        result["seconds"] = round(b - a, 2)
+        with tempfile.TemporaryDirectory(prefix="gtaclip-") as tmp:
+            made = _render(video, a, b, hook, words, cam, info, mp4, Path(tmp))
+        if cam and not made["cam"]:
+            notes.append("The facecam box didn't fit the video, so the gameplay fills the whole height.")
+        _cover(mp4, jpg, min(COVER_AT, (b - a) / 2))
+        ok, qc_notes, measured = qc.check(mp4, b - a, setting("max_short_s"))
+        notes.extend(qc_notes)
+        result["ok"] = ok
+        log(f"  {name}: {b - a:.1f} s, {measured.get('lufs')} LUFS, "
+            f"{'ok' if ok else 'needs a look'} ({time.time() - t_start:.0f} s to make)")
+    except Exception as e:                                  # one bad moment must not stop the others
+        notes.append(f"Couldn't make this Short: {e}")
+        for p in (mp4, jpg):
+            if p.exists() and p.stat().st_size < 1000:
+                p.unlink()
+    save(js, result)
+    return result
