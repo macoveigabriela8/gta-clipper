@@ -166,8 +166,56 @@ def _write_check(mp4: Path, info: dict, moment: dict, cam: dict | None, since: f
                    "hook": moment.get("hook"), "caption": moment.get("caption"), "cam": cam})
 
 
+def _cam_for(m: dict, video: Path, start: float, end: float, default: dict | None = None) -> tuple[dict | None, bool]:
+    """The facecam box of one moment: given in the plan, switched off, or found. Returns (box, usable)."""
+    from clipper import facecam
+    given = m.get("cam") if isinstance(m.get("cam"), dict) else None
+    if given is None and m.get("facecam") is not False and isinstance(default, dict):
+        given = default
+    if given is not None:
+        try:
+            cam = {k: int(given[k]) for k in ("x", "y", "w", "h")}
+        except (KeyError, ValueError, TypeError):
+            log('✗ "cam" needs x, y, w, h in the video\'s pixels: skipped')
+            return None, False
+        log("  facecam: the box given in the plan")
+        return cam, True
+    if m.get("facecam") is False:
+        log("  facecam: off for this moment")
+        return None, True
+    cam = facecam.detect(video, start, end)
+    log(f"  facecam: found ({cam['w']}x{cam['h']} at {cam['x']},{cam['y']})" if cam
+        else "  facecam: none found, gameplay goes full height")
+    return cam, True
+
+
+def _make_top5(top: dict, video: Path, words: list, out_dir: Path) -> dict | None:
+    from clipper import top5
+
+    def cam_for(item: dict, start: float, end: float) -> dict | None:
+        cam, usable = _cam_for(item, video, start, end, top.get("cam"))
+        if not usable:
+            raise ValueError(f'#{item.get("rank")}: "cam" needs x, y, w, h')
+        return cam
+
+    items = top.get("items") or []
+    log(f"\n[Top 5] {len(items)} pieces, #5 first, #1 last · {top.get('hook') or '(no hook)'}")
+    t0 = time.time()
+    try:
+        info = top5.build(video, top, words, cam_for, out_dir)
+    except Exception as e:
+        log(f"✗ the Top 5 failed: {type(e).__name__}: {e}")
+        return None
+    secs = float(info.get("seconds") or 0)
+    if Path(info["mp4"]).exists():
+        log(f"{'✓' if info.get('ok') else '!'} {info['mp4']} ({secs:.1f} s long, made in {time.time() - t0:.0f} s)")
+    for note in info.get("notes") or []:
+        log(f"   - {note}")
+    return info if Path(info["mp4"]).exists() else None
+
+
 def cmd_make(a) -> int:
-    from clipper import facecam, frames, gallery, hearing
+    from clipper import frames, gallery, hearing
     try:
         from clipper import render
     except ImportError as e:
@@ -176,7 +224,8 @@ def cmd_make(a) -> int:
     plan = _plan(proj)
     video = _source(plan, proj)
     moments = plan.get("moments") or []
-    if not moments:
+    top = plan.get("top5") if isinstance(plan.get("top5"), dict) else None
+    if not moments and not top:
         raise SystemExit(f"No moments in {proj / 'plan.json'} yet. Add them like: "
                          '{"a": 401, "b": 435, "hook": "...", "caption": "..."}')
     words = paths.load(proj / "words.json", None)
@@ -185,8 +234,8 @@ def cmd_make(a) -> int:
     dur = frames.video_info(video)["dur"]
     out_dir = paths.SHORTS / paths.today()
     out_dir.mkdir(parents=True, exist_ok=True)
-    log(f"GTA Clipper · making {len(moments)} Short{'s' if len(moments) != 1 else ''} from {proj.name}"
-        f" (about 5-20 s each)")
+    log(f"GTA Clipper · making {len(moments)} Short{'s' if len(moments) != 1 else ''}"
+        f"{' + 1 Top 5 countdown' if top else ''} from {proj.name}")
     made = 0
     run_t0, done_n = time.time(), 0
     qa_rows: list[tuple[str, bool, str]] = []
@@ -206,20 +255,9 @@ def cmd_make(a) -> int:
             continue
         if not 10 <= end - start <= 60:
             log("! outside 10-60 s: most good Shorts are 15-45 s")
-        if isinstance(m.get("cam"), dict):
-            try:
-                cam = {k: int(m["cam"][k]) for k in ("x", "y", "w", "h")}
-                log("  facecam: the box given in the plan")
-            except (KeyError, ValueError, TypeError):
-                log('✗ "cam" needs x, y, w, h in the video\'s pixels: skipped')
-                continue
-        elif m.get("facecam") is False:
-            cam = None
-            log("  facecam: off for this moment")
-        else:
-            cam = facecam.detect(video, start, end)
-            log(f"  facecam: found ({cam['w']}x{cam['h']} at {cam['x']},{cam['y']})" if cam
-                else "  facecam: none found, gameplay goes full height")
+        cam, usable = _cam_for(m, video, start, end)
+        if not usable:
+            continue
         name = f"{i:02d}_{paths.slug(hook)}"
         t0 = time.time()
         try:
@@ -242,15 +280,22 @@ def cmd_make(a) -> int:
         if rest:
             each = (time.time() - run_t0) / done_n
             log(f"  Short {i} of {len(moments)} done · about {max(1, round(each * rest))} s for the other {rest}")
+    wanted = len(moments)
+    if top:
+        wanted += 1
+        info = _make_top5(top, video, words, out_dir)
+        if info:
+            made += 1
+            qa_rows.append((Path(info["mp4"]).name, bool(info.get("ok")), str(info.get("qa_sheet") or "")))
     page = gallery.build()
     if qa_rows:
         good = sum(1 for _, ok, _ in qa_rows if ok)
         log(f"\nQA: {good} of {len(qa_rows)} passed the automatic checks"
             + ("" if good == len(qa_rows) else " · fix the NEEDS A LOOK ones (notes above) and make them again"))
-        log("QA sheets to look at before telling the user (hook, middle, last 4 s):")
+        log("QA sheets to look at before telling the user (hook, middle, last 4 s; Top 5: each rank's edges):")
         for name, ok, sheet in qa_rows:
             log(f"  {'✓' if ok else '✗'} {sheet or name}")
-    log(f"\n{made} of {len(moments)} Shorts made in {out_dir}")
+    log(f"\n{made} of {wanted} Shorts made in {out_dir}")
     log(f"Review page: {page}")
     if not a.no_open:
         paths.open_path(page)

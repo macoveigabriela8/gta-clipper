@@ -20,7 +20,9 @@ Works with YouTube, Twitch (VODs and clips), Kick, TikTok, or a video file on yo
 ## What you get
 
 2-3 Shorts per stream (15-45 s, 1080x1920) in `~/GTAClipper/shorts/<date>/`, each with a post caption, and a review
-page that opens when they're done. Every Short passes an automatic QA first (sound level, dead air, no double
+page that opens when they're done. Formats: **streamer moments** (face on top, game below), **full gameplay** (when
+the stream has no webcam) and a **Top 5 countdown** (five short moments, #5 to #1, one Short) when a stream has 5+
+good moments. Claude picks the format that fits. Every Short passes an automatic QA first (sound level, dead air, no double
 captions, the real webcam on top, an ending that lands on the payoff), and Claude looks at its frames.
 The rules are in `reference/cutting-sop.md`. Watch each one before you post it.
 

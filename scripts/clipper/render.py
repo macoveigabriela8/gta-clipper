@@ -155,11 +155,11 @@ def _loudness_fix(video: Path, a: float, dur: float) -> str:
 
 
 def _render(video: Path, a: float, b: float, hook: str, words: list[dict], cam_raw: dict | None, info: dict,
-            mp4: Path, work: Path, keep: float = 1.0) -> dict:
+            mp4: Path, work: Path, keep: float = 1.0, hook_hold: float | None = None) -> dict:
     dur = b - a
     sw, sh = info["w"], info["h"]
     cam = fit_cam(cam_raw, sw, sh)
-    hook_s = min(float(setting("hook_seconds") or 3.0), dur)
+    hook_s = min(float(hook_hold or setting("hook_seconds") or 3.0), dur)   # hook_hold: the pill stays longer
     hook_png, hx, hy = overlays.hook_png(hook, work / "hook.png")
     cap_list = overlays.caption_track(words, a, b, work)
 
@@ -387,7 +387,7 @@ def build_short(video: Path, a: float, b: float, hook: str, caption: str, words:
             notes.append(keep_note)
         result["keep"] = keep
         with tempfile.TemporaryDirectory(prefix="gtaclip-") as tmp:
-            made = _render(video, a, b, hook, words, cam, info, mp4, Path(tmp), keep)
+            made = _render(video, a, b, hook, words, cam, info, mp4, Path(tmp), keep, (moment or {}).get("hook_hold"))
         if cam and not made["cam"]:
             notes.append("The facecam box didn't fit the video, so the gameplay fills the whole height.")
         if info["has_audio"]:

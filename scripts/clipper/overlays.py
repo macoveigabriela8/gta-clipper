@@ -98,9 +98,16 @@ def _hook_lines(text: str) -> tuple[list[str], int]:
 
 
 def hook_png(text: str, out: Path) -> tuple[Path, int, int]:
-    """Draw the hook pill. Returns (png, x, y) where to place it on the 1080 x 1920 frame."""
-    text = " ".join(str(text).upper().split()) or " "
-    lines, size = _hook_lines(text)
+    """Draw the hook pill. Returns (png, x, y) where to place it on the 1080 x 1920 frame. A "\n" in the text
+    forces the line break (the Top 5's first piece: the hook, then its rank)."""
+    forced = [" ".join(l.split()) for l in str(text).upper().split("\n") if l.strip()]
+    if len(forced) > 1:
+        room = HOOK_MAX_W - 2 * HOOK_PAD_X
+        size = next((s for s in range(HOOK_SIZE, HOOK_MIN_SIZE - 1, -2)
+                     if max(hook_font(s).getlength(l) for l in forced) <= room), HOOK_MIN_SIZE)
+        lines = forced
+    else:
+        lines, size = _hook_lines(" ".join(str(text).upper().split()) or " ")
     f = hook_font(size)
     cap = _cap_height(f)
     gap = round(cap * 1.55)                       # baseline to baseline

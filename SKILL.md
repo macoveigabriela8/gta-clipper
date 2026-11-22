@@ -23,6 +23,8 @@ This skill's folder is the one holding this SKILL.md (normally `~/.claude/skills
    If `uv run --python 3.12` fails on Windows with a link/shortcut error, run `uv python find 3.12` and pass that
    full python.exe path to `--python` instead (some Windows Servers break uv's Python shortcut).
 2. `gc setup` — installs the libraries and downloads the speech model once (about 1-2 minutes). Wait for "Ready".
+   Then tell the user, in 3 lines: "I can make 3 kinds: streamer moments (face on top, game below), full gameplay
+   (when there's no webcam), and a Top 5 countdown. I'll pick what fits your stream."
 3. `gc get "<link or file>"` — downloads the video (long streams: the first 40 min; `--minutes 90` for more), listens
    to it and writes `scan/chunk_*.md` in a new project under `~/GTAClipper/projects/`.
 4. Read `reference/cutting-sop.md` (the cutting rules and the QA), then every chunk file. Lines marked 🔥🔥 / 🔥
@@ -32,11 +34,16 @@ This skill's folder is the one holding this SKILL.md (normally `~/.claude/skills
 5. **Always ask, even for one moment** (unless they already said how many, or "you choose"): list what you found,
    best first, one line each (time, length, the hook), then "I found N clippable moments. Make just the best one,
    or all N? Each takes about 10 seconds." With one: "I found 1 clippable moment: … Make it, or pick a different
-   part?" Then write the chosen ones into the project's `plan.json` under `"moments"`:
+   part?" **The format is your call, said inside that same question** (no extra step): the layout follows the
+   webcam (found: face on top; none: full gameplay), and with 5+ decent moments add one Top 5 countdown: "I found
+   7 moments. I'll make the best 3 as Shorts plus one Top 5 countdown. Go, or just the best one?" The user can
+   still say "only the Top 5" or "full gameplay". Top 5 rules and its plan shape: `reference/cutting-sop.md` § 7.
+   Then write the chosen ones into the project's `plan.json` under `"moments"`:
    `{"a": 401, "b": 435, "hook": "He just paid 25K for this truck", "caption": "Never complain out loud #gtarp",
    "payoff": "the truck flips into the river", "payoff_at": 432.5}`
    (`a` / `b` / `payoff_at` in seconds of the video; end 1-3 s after the payoff). "You choose" = the best 3.
-6. `gc make "<project folder>" --no-open` — renders them one by one and runs the QA on each (below).
+6. `gc make "<project folder>" --no-open` — renders them one by one (and the `"top5"`, when the plan has one) and
+   runs the QA on each (below).
 7. **QA, never skipped.** Fix every ✗ the make printed (the fix for each is in `reference/cutting-sop.md` § 6),
    then Read every `<name>_qa.jpg` it lists and do the eye check (§ 5): real webcam on top, no second set of
    captions, the last 4 frames land on the payoff. Make again until clean (two rounds at most; then drop that

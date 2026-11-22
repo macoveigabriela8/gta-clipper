@@ -82,3 +82,41 @@ Formulas: **He thought X…** · **Stakes** ("He just paid 25K for this truck") 
 Make again (`gc make`), at most two rounds. Still failing: drop the moment and tell the user why in one line.
 Only hand over Shorts that passed every ✗ check and the eye check. Tell the user, per Short, one line:
 "✓ QA passed" or what you fixed.
+
+## 7. Top 5 countdown (one Short, five moments, #5 first, #1 last)
+
+Offer it only when the stream has 5+ decent moments. Plan shape (next to `"moments"`, or alone):
+`"top5": {"hook": "His 5 wildest RP moments", "caption": "Which one was the worst? #gtarp", "items": [`
+`{"rank": 5, "a": 122, "b": 129, "label": "Granny's new boy toy", "payoff_at": 128.4}, ... ]}`
+(`"cam"` / `"facecam"` / `"drop_bottom"` per item as for moments; `"cam"` on `top5` = for every item.)
+Each piece is made like a normal Short; its pill reads "#3 LABEL" for the whole piece (piece #5 also shows the hook
+on the line above). The five are joined into `top5_<hook>.mp4`, levelled, and checked.
+
+| Rule | Why | QA check |
+|---|---|---|
+| Ranks 5, 4, 3, 2, 1, each once. Worst first, best last. | A countdown that skips or repeats a number reads as a mistake. | ✗ `ranks` |
+| Each piece 4-9 s around its payoff: start right before the setup line, end 0.3-3 s after the payoff. | Long pieces kill the pace; a piece cut before its payoff has no point. | ✗ `item_length` (3-10 s), ✗ `item_payoff` |
+| Five different moments, at least 1 s apart in the video. | The same seconds playing twice. | ✗ `items_apart` |
+| Labels 2-4 words, the moment's name ("Laughing crash"), not the joke. | Long labels wrap small and nobody reads them. | ! `labels` |
+| Hook 3-8 words, short enough to sit on one line above "#5 ...". | A long hook shrinks the first pill. | ! `hook` |
+| Total 59 s or less. | YouTube Shorts limit. | ! `total_length` |
+| Edges on word gaps (pick `a` / `b` between two words in `words.json`). | A word cut in half at a cut. | ! `item_edges` |
+| No menus, dark scenes or someone else's clip in a piece. | Same as any Short. | the file checks in § 4 |
+
+Automatic checks on the joined Short: every § 4 file check (plays, length, size, sound, loudness, peak, silence,
+black, frozen, no_double_captions, bright_enough, shorts_length), plus `badge_visible` ✗ (one frame half-way
+through each piece: the rank pill is really there, 70%+ of its pixels match) and `webcam` ✗ judged per piece (each
+piece has its own cam crop). The single-moment checks (payoff, link_end, clean_*, talking, one_clip) are replaced by
+the per-piece ones above.
+
+**Eye check:** read `top5_<hook>_qa.jpg` (row 1 = first frame of #5..#1, row 2 = last frame): the pill readable in
+every frame, the real webcam on top, one set of captions, each last frame on its payoff.
+
+| Fails | Fix |
+|---|---|
+| `ranks` | Number the items 5..1, each once. |
+| `item_length` / `item_payoff` | Move that item's `"a"` / `"b"` to 4-9 s ending 0.3-3 s after `"payoff_at"`. |
+| `items_apart` | Pick another moment for one of the two. |
+| `badge_visible` | Look at the QA sheet; usually a broken render: make it again. |
+| `webcam` (#N) | Give `"cam"` by hand on item #N (or `"facecam": false`). |
+| `item_edges` (!) | Move that edge into the gap between two words. |
