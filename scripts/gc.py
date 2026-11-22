@@ -184,8 +184,10 @@ def cmd_make(a) -> int:
     dur = frames.video_info(video)["dur"]
     out_dir = paths.SHORTS / paths.today()
     out_dir.mkdir(parents=True, exist_ok=True)
-    log(f"GTA Clipper · making {len(moments)} Short{'s' if len(moments) != 1 else ''} from {proj.name}")
+    log(f"GTA Clipper · making {len(moments)} Short{'s' if len(moments) != 1 else ''} from {proj.name}"
+        f" (about 5-20 s each)")
     made = 0
+    run_t0, done_n = time.time(), 0
     for i, m in enumerate(moments, 1):
         try:
             start, end = paths.seconds(m["a"]), paths.seconds(m["b"])
@@ -232,6 +234,11 @@ def cmd_make(a) -> int:
         log(f"{'✓' if info.get('ok') else '!'} {info['mp4']} ({float(secs):.1f} s long, made in {time.time() - t0:.0f} s)")
         for note in info.get("notes") or []:
             log(f"   - {note}")
+        done_n += 1
+        rest = len(moments) - i
+        if rest:
+            each = (time.time() - run_t0) / done_n
+            log(f"  Short {i} of {len(moments)} done · about {max(1, round(each * rest))} s for the other {rest}")
     page = gallery.build()
     log(f"\n{made} of {len(moments)} Shorts made in {out_dir}")
     log(f"Review page: {page}")

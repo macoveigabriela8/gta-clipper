@@ -22,13 +22,19 @@ This skill's folder is the one holding this SKILL.md (normally `~/.claude/skills
    Then use the full path until a new terminal opens: Mac `~/.local/bin/uv`, Windows `$env:USERPROFILE\.local\bin\uv.exe`.
 2. `gc setup` — installs the libraries and downloads the speech model once (about 1-2 minutes). Wait for "Ready".
 3. `gc get "<link or file>"` — downloads the video (long streams: the first 40 min; `--minutes 90` for more), listens
-   to it and writes `scan/chunk_*.md` in a new project under `~/GTAClipper/projects/`.
-4. Read every chunk file. Lines marked 🔥🔥 / 🔥 are the loudest, wildest seconds. Pick the 2-3 best moments (below),
-   check each window with `gc look "<video>" --from 6:40 --to 7:16 --every 3` and read the contact sheet.
-5. Write them into the project's `plan.json` under `"moments"`:
+   to it and writes `scan/chunk_*.md` in a new project under `~/GTAClipper/projects/`. Before you run it, tell the
+   user in one line what happens and how long: "Downloading and listening: about 1-3 min per 10 min of video."
+   Pass on the progress lines it prints ("listening 40% · about 2 min left") so they see it moving.
+4. Read every chunk file. Lines marked 🔥🔥 / 🔥 are the loudest, wildest seconds. Find every moment worth a Short
+   (below) and check each window with `gc look "<video>" --from 6:40 --to 7:16 --every 3` (read the contact sheet).
+5. **Ask once, short:** list what you found, best first, one line each (time, length, the hook), then:
+   "I found N clippable moments. Make just the best one, or all N? Each takes about 10 seconds."
+   If they already said how many ("clip 3", "just one") or say "you choose", don't ask: make that many (default: the
+   best 3). Write the chosen ones into the project's `plan.json` under `"moments"`:
    `{"a": 401, "b": 435, "hook": "He just paid 25K for this truck", "caption": "Never complain out loud #gtarp"}`
    (`a` / `b` in seconds of the video).
-6. `gc make "<project folder>"` — renders every moment and opens the review page. Tell the user where the Shorts are
+6. `gc make "<project folder>"` — renders them one by one and prints "Short 1 of 3 done · about 20 s for the other 2";
+   pass that on. It opens the review page at the end. Tell the user where the Shorts are
    (`~/GTAClipper/shorts/<date>/`) and to watch each one before posting.
 
 No link given? Ask for one: a YouTube video or VOD, a Twitch VOD or clip, or a video file on the computer.

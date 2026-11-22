@@ -103,6 +103,11 @@ def _drop_loops(pieces: list[tuple[dict, list[dict]]]) -> list[tuple[dict, list[
     return out
 
 
+def _eta(sec: float) -> str:
+    sec = max(1, int(round(sec)))
+    return f"{sec} s" if sec < 90 else f"{round(sec / 60)} min"
+
+
 def transcribe(video: Path, project: Path) -> list[dict]:
     """Every word with its time: project/words.json = [{"w", "start", "end"}] in seconds of the video, plus
     project/segments.json = [{"start", "end", "text"}]. Cached: skipped when words.json is newer than the video."""
@@ -125,7 +130,7 @@ def transcribe(video: Path, project: Path) -> list[dict]:
     total = len(audio) / RATE
     name = setting("whisper_model")
     model = load_model(name)
-    log(f"  listening with {name} ({total / 60:.1f} min of sound)…")
+    log(f"  listening with {name} ({total / 60:.1f} min of sound, usually 1-3 min per 10 min of video)…")
     pieces, shown = [], 0
     with warnings.catch_warnings():         # numpy on Apple's Accelerate warns about harmless float flags
         warnings.simplefilter("ignore", RuntimeWarning)
@@ -140,9 +145,11 @@ def transcribe(video: Path, project: Path) -> list[dict]:
                 pieces.append(({"start": round(float(s.start), 2), "end": round(float(s.end), 2),
                                 "text": s.text.strip()}, []))
             pct = int(100 * min(1.0, float(s.end) / max(total, 1.0)))
-            if pct >= shown + 20:
-                shown = pct - pct % 20
-                log(f"    {shown}%")
+            if pct >= shown + 10:
+                shown = pct - pct % 10
+                spent = time.time() - t0
+                left = spent * (100 - shown) / max(shown, 1)   # time so far, scaled to what's still to hear
+                log(f"    listening {shown}% · about {_eta(left)} left")
     pieces = _drop_loops(pieces)
     segs = [line for line, _ in pieces]
     words = [w for _, ws in pieces for w in ws]
