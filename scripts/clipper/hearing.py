@@ -17,12 +17,31 @@ from .paths import MODELS, ffmpeg, load, log, run, save, setting
 
 RATE = 16000
 _models: dict = {}
+_dll_dirs_added = False
+
+
+def _windows_runtime() -> None:
+    """Windows without Microsoft's C++ runtime installed (fresh PCs, Windows Server): the msvc-runtime pip package
+    puts those files next to this Python, and the speech engine is told to look there. No admin needed."""
+    global _dll_dirs_added
+    if _dll_dirs_added or not os.name == "nt":
+        return
+    _dll_dirs_added = True
+    import sys
+    for d in {sys.prefix, os.path.join(sys.prefix, "Scripts"), sys.base_prefix}:
+        if os.path.isdir(d):
+            try:
+                os.add_dll_directory(d)
+            except OSError:
+                pass
+            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
 
 
 def load_model(name: str | None = None):
     """The faster-whisper model (CPU, int8). Downloaded once into MODELS/whisper, then read from there."""
     name = name or setting("whisper_model")
     if name not in _models:
+        _windows_runtime()
         from faster_whisper import WhisperModel
         root = MODELS / "whisper"
         root.mkdir(parents=True, exist_ok=True)
@@ -131,12 +150,30 @@ def transcribe(video: Path, project: Path) -> list[dict]:
     name = setting("whisper_model")
     model = load_model(name)
     log(f"  listening with {name} ({total / 60:.1f} min of sound, usually 1-3 min per 10 min of video)…")
+    for use_vad in (True, False):
+        try:
+            pieces = _listen(model, audio, total, t0, use_vad)
+            break
+        except Exception as e:              # voice detection needs onnxruntime; if it can't load, hear everything
+            if not use_vad:
+                raise
+            log(f"  ! voice detection couldn't start ({type(e).__name__}): listening to the whole track instead")
+    pieces = _drop_loops(pieces)
+    segs = [line for line, _ in pieces]
+    words = [w for _, ws in pieces for w in ws]
+    save(words_f, words)
+    save(segs_f, segs)
+    log(f"✓ heard {len(words)} words in {len(segs)} lines ({time.time() - t0:.0f} s): {words_f}")
+    return words
+
+
+def _listen(model, audio, total: float, t0: float, use_vad: bool) -> list:
     pieces, shown = [], 0
     with warnings.catch_warnings():         # numpy on Apple's Accelerate warns about harmless float flags
         warnings.simplefilter("ignore", RuntimeWarning)
-        seg_iter, _ = model.transcribe(audio, beam_size=5, word_timestamps=True, vad_filter=True,
-                                       vad_parameters={"min_silence_duration_ms": 500},
-                                       condition_on_previous_text=False)
+        opts = {"vad_filter": True, "vad_parameters": {"min_silence_duration_ms": 500}} if use_vad else {}
+        seg_iter, _ = model.transcribe(audio, beam_size=5, word_timestamps=True,
+                                       condition_on_previous_text=False, **opts)
         for s in seg_iter:
             toks = [(w.word or "", float(w.start), float(w.end)) for w in (s.words or []) if (w.word or "").strip()]
             if toks:
@@ -150,10 +187,4 @@ def transcribe(video: Path, project: Path) -> list[dict]:
                 spent = time.time() - t0
                 left = spent * (100 - shown) / max(shown, 1)   # time so far, scaled to what's still to hear
                 log(f"    listening {shown}% · about {_eta(left)} left")
-    pieces = _drop_loops(pieces)
-    segs = [line for line, _ in pieces]
-    words = [w for _, ws in pieces for w in ws]
-    save(words_f, words)
-    save(segs_f, segs)
-    log(f"✓ heard {len(words)} words in {len(segs)} lines ({time.time() - t0:.0f} s): {words_f}")
-    return words
+    return pieces

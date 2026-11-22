@@ -20,23 +20,30 @@ def _detectors():
     if _cascades is None:
         import cv2
         base = cv2.data.haarcascades
-        # alt2 first: measured on a small capped webcam it found the face in 22/24 frames vs 19/24 for default
+        # front-on (two models) + side-on. Measured: a capped streamer was found in 22/24 frames by alt2 alone;
+        # a streamer holding his head (small bottom-left cam) only in 9-13/30 by front-on, 17/30 by side-on.
         _cascades = [cv2.CascadeClassifier(base + n) for n in
-                     ("haarcascade_frontalface_alt2.xml", "haarcascade_frontalface_default.xml")]
+                     ("haarcascade_frontalface_alt2.xml", "haarcascade_frontalface_default.xml",
+                      "haarcascade_profileface.xml")]
     return _cascades
 
 
 def _faces(img) -> list[tuple[int, int, int, int]]:
-    """Face boxes in one frame. Loose on purpose (small webcams, caps, heads turned): detect() keeps only a face
-    that sits in the same spot across many frames, which throws away the stray hits."""
+    """Face boxes in one frame from every detector together (side-on faces both ways too). Loose on purpose
+    (small webcams, caps, hands on the face, heads turned): detect() keeps only a face that sits in the same
+    spot across many frames, which throws away the stray hits."""
     import cv2
     g = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2GRAY)
     g = cv2.equalizeHist(g)
-    for c in _detectors():
-        f = c.detectMultiScale(g, scaleFactor=1.06, minNeighbors=3, minSize=(14, 14))
-        if len(f):
-            return [tuple(int(v) for v in b) for b in f]
-    return []
+    w = g.shape[1]
+    found: list[tuple[int, int, int, int]] = []
+    for i, c in enumerate(_detectors()):
+        found += [tuple(int(v) for v in b) for b in c.detectMultiScale(g, scaleFactor=1.06, minNeighbors=3,
+                                                                        minSize=(14, 14))]
+        if i == 2:                               # the side-on model only knows one direction: also look mirrored
+            found += [(w - int(x) - int(bw), int(y), int(bw), int(bh)) for (x, y, bw, bh) in
+                      c.detectMultiScale(cv2.flip(g, 1), scaleFactor=1.06, minNeighbors=3, minSize=(14, 14))]
+    return found
 
 
 def detect(video: Path, a: float = 0.0, b: float | None = None, n: int = 24, sample_w: int = 960) -> dict | None:
@@ -72,6 +79,9 @@ def detect(video: Path, a: float = 0.0, b: float | None = None, n: int = 24, sam
             best, best_frames = members, frames_hit
     if len(best_frames) < max(4, int(0.35 * len(frames))):
         return None                              # no face that stays put: no webcam (or it's hidden)
+    quarters = {min(3, 4 * i // len(frames)) for i in best_frames}
+    if len(quarters) < 3:
+        return None                              # only in one stretch: a game close-up, not a webcam that's always on
     med = np.median(np.array([bb[1:] for bb in best], dtype=float), axis=0)
     x, y, w, h = med
     if h > 0.45 * fh:
@@ -85,6 +95,14 @@ def detect(video: Path, a: float = 0.0, b: float | None = None, n: int = 24, sam
         box_w = box_h * CAM_ASPECT
     x0 = min(max(0.0, cx - box_w / 2), sw - box_w)
     y0 = min(max(0.0, cy - box_h * 0.55), sh - box_h)    # face a bit low: the hook pill sits on top
+    # A webcam keeps the same room behind the face; a game character's face sits on a changing scene.
+    # Measured (mean change of the box over the clip, 0-1): webcams 0.02-0.06, a game close-up 0.10.
+    k = fw / sw
+    crop = (int(x0 * k), int(y0 * k), int((x0 + box_w) * k), int((y0 + box_h) * k))
+    tiles = np.stack([np.asarray(fr.crop(crop).convert("L").resize((48, 32)), dtype=float) for fr in frames])
+    change = float(np.mean(np.abs(tiles - np.median(tiles, axis=0))) / 255)
+    if change > 0.09:
+        return None
     ev = lambda v: int(round(v / 2) * 2)
     return {"x": ev(x0), "y": ev(y0), "w": ev(box_w), "h": ev(box_h), "frames": len(best_frames), "of": len(frames),
-            "side": "left" if cx < sw / 2 else "right"}
+            "side": "left" if cx < sw / 2 else "right", "change": round(change, 3)}

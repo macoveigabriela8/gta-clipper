@@ -3,6 +3,8 @@ gameplay below, black hook pill first, word-by-word captions on the seam, loudne
 Entry point: build_short()."""
 from __future__ import annotations
 
+import json
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -117,11 +119,31 @@ def _graph(sw: int, sh: int, cam: dict | None, cam_raw: dict | None, dur: float,
     f.append(f"[{last}][hook]overlay={hook_xy[0]}:{hook_xy[1]}:eof_action=pass,format=yuv420p[vout]")
     audio = f"[{audio_src}]aresample=48000"
     if normalise:
-        audio += ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"
+        audio += f",{normalise},aresample=48000"
     audio += (f",apad,atrim=0:{dur:.3f},afade=t=in:st=0:d={FADE},"
               f"afade=t=out:st={max(0.0, dur - FADE):.3f}:d={FADE}[aout]")
     f.append(audio)
     return ";".join(f)
+
+
+def _loudness_fix(video: Path, a: float, dur: float) -> str:
+    """Measure this stretch's loudness first, then lift or lower it to about -14 LUFS with a peak limiter on top.
+    (A single loudnorm pass undershot quiet clips: a 30 s stream clip came out at -22.9.)"""
+    fallback = "loudnorm=I=-14:TP=-1.5:LRA=11"
+    p = subprocess.run([ffmpeg(), "-hide_banner", "-nostdin", "-ss", f"{a:.3f}", "-t", f"{dur:.3f}", "-i", str(video),
+                        "-vn", "-af", fallback + ":print_format=json", "-f", "null", "-"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    try:
+        txt = p.stderr
+        m = json.loads(txt[txt.rindex("{"):txt.rindex("}") + 1])
+        measured = float(m["input_i"])
+    except (ValueError, KeyError):
+        return fallback
+    if measured < -60:                          # silence: leave it alone
+        return "anull"
+    gain = max(-20.0, min(25.0, -14.0 - measured))
+    # a gentle compressor first, so a few loud screams do not hold the whole clip down
+    return f"acompressor=threshold=-22dB:ratio=3:attack=10:release=150:makeup=1,volume={gain + 2:.2f}dB,alimiter=limit=0.89:level=false"
 
 
 def _render(video: Path, a: float, b: float, hook: str, words: list[dict], cam_raw: dict | None, info: dict,
@@ -142,10 +164,10 @@ def _render(video: Path, a: float, b: float, hook: str, words: list[dict], cam_r
     cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{hook_s:.3f}", "-i", str(hook_png)]
     hook_input, idx = idx, idx + 1
     if info["has_audio"]:
-        audio_src, normalise = "0:a", True
+        audio_src, normalise = "0:a", _loudness_fix(video, a, dur)
     else:
         cmd += ["-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
-        audio_src, normalise = f"{idx}:a", False
+        audio_src, normalise = f"{idx}:a", None
         idx += 1
     avoid = {k: float(cam_raw[k]) for k in ("x", "y", "w", "h")} if cam else None
     graph = _graph(sw, sh, cam, avoid, dur, cap_input, hook_input, (hx, hy), hook_s, audio_src, normalise)

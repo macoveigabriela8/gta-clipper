@@ -9,6 +9,7 @@
 #   "yt-dlp[default]",
 #   "deno",
 #   "certifi",
+#   "msvc-runtime; sys_platform == 'win32'",
 # ]
 # ///
 """GTA Clipper: one stream link (or video file) in, finished vertical Shorts out.

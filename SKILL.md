@@ -20,22 +20,31 @@ This skill's folder is the one holding this SKILL.md (normally `~/.claude/skills
    - Mac: `curl -LsSf https://astral.sh/uv/install.sh | sh`
    - Windows (PowerShell): `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
    Then use the full path until a new terminal opens: Mac `~/.local/bin/uv`, Windows `$env:USERPROFILE\.local\bin\uv.exe`.
+   If `uv run --python 3.12` fails on Windows with a link/shortcut error, run `uv python find 3.12` and pass that
+   full python.exe path to `--python` instead (some Windows Servers break uv's Python shortcut).
 2. `gc setup` — installs the libraries and downloads the speech model once (about 1-2 minutes). Wait for "Ready".
 3. `gc get "<link or file>"` — downloads the video (long streams: the first 40 min; `--minutes 90` for more), listens
-   to it and writes `scan/chunk_*.md` in a new project under `~/GTAClipper/projects/`. Before you run it, tell the
-   user in one line what happens and how long: "Downloading and listening: about 1-3 min per 10 min of video."
-   Pass on the progress lines it prints ("listening 40% · about 2 min left") so they see it moving.
+   to it and writes `scan/chunk_*.md` in a new project under `~/GTAClipper/projects/`.
 4. Read every chunk file. Lines marked 🔥🔥 / 🔥 are the loudest, wildest seconds. Find every moment worth a Short
    (below) and check each window with `gc look "<video>" --from 6:40 --to 7:16 --every 3` (read the contact sheet).
-5. **Ask once, short:** list what you found, best first, one line each (time, length, the hook), then:
-   "I found N clippable moments. Make just the best one, or all N? Each takes about 10 seconds."
-   If they already said how many ("clip 3", "just one") or say "you choose", don't ask: make that many (default: the
-   best 3). Write the chosen ones into the project's `plan.json` under `"moments"`:
+5. **Always ask, even for one moment** (unless they already said how many, or "you choose"): list what you found,
+   best first, one line each (time, length, the hook), then "I found N clippable moments. Make just the best one,
+   or all N? Each takes about 10 seconds." With one: "I found 1 clippable moment: … Make it, or pick a different
+   part?" Then write the chosen ones into the project's `plan.json` under `"moments"`:
    `{"a": 401, "b": 435, "hook": "He just paid 25K for this truck", "caption": "Never complain out loud #gtarp"}`
-   (`a` / `b` in seconds of the video).
-6. `gc make "<project folder>"` — renders them one by one and prints "Short 1 of 3 done · about 20 s for the other 2";
-   pass that on. It opens the review page at the end. Tell the user where the Shorts are
-   (`~/GTAClipper/shorts/<date>/`) and to watch each one before posting.
+   (`a` / `b` in seconds of the video). "You choose" = the best 3.
+6. `gc make "<project folder>"` — renders them one by one, then opens the review page. Look at each Short's cover
+   (.jpg): if the top band is not the streamer's webcam (a game scene, a wall), set `"facecam": false` on that
+   moment and make it again. Tell the user where the Shorts are (`~/GTAClipper/shorts/<date>/`) and to watch each
+   one before posting.
+
+**Keep the user posted, in the chat itself** (the app folds command output away, so they won't see it unless you say
+it). Before every step, one line with what happens and how long:
+- setup: "Installing the tools, about 1-2 minutes (only the first time)."
+- get: "Downloading and listening to the stream: about 1-3 min per 10 min of video (this one is N min)."
+- make: "Making N Shorts, about 10-20 seconds each."
+Add once: "You can click the running step to watch it live." After each step, say what came out in one line
+("Heard 755 words, 15 hot moments", "Short 1 of 3 done").
 
 No link given? Ask for one: a YouTube video or VOD, a Twitch VOD or clip, or a video file on the computer.
 
