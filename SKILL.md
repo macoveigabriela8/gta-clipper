@@ -53,6 +53,10 @@ No link given? Ask for one: a YouTube video or VOD, a Twitch VOD or clip, or a v
 - Keep it if someone with the sound off gets it in two seconds, and it has a setup and a payoff (the plan, then what
   really happened). End right after the payoff (the reaction, the explosion, the "no way").
 - Window: start 3-6 s before the setup, end 1-2 s after the payoff. 15-45 s.
+- Never put a 🔇 silent stretch (listed in the notes) inside a window: start after it or end before it. Silence at
+  the very start or end of a Short is trimmed for you; silence of 2 s or more in the middle makes the Short come
+  back "needs a look" with the second it happens. Then move the window or split it into two moments and make it
+  again. Don't hand over a Short with a silent middle.
 - Drop it if it needs five minutes of context, has music or radio playing (claims), or is a menu or loading screen.
 - A compilation (several streamers): each moment finds its own facecam; stay inside one clip.
 

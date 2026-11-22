@@ -141,6 +141,23 @@ def _words(words: list[dict], n: int, loud_z: np.ndarray) -> tuple[np.ndarray, l
     return 1.0 - np.exp(-acc), why
 
 
+def _silences(wav: Path | None, min_s: float = 2.0, quiet_db: float = -50.0) -> list[tuple[float, float]]:
+    """(start, end) seconds of every stretch of min_s or more with no real sound (Twitch mutes, dead air)."""
+    if wav is None:
+        return []
+    step = 0.5
+    levels = hearing.loudness(wav, step)
+    out, start = [], None
+    for i, v in enumerate(list(levels) + [0.0]):
+        if v <= quiet_db:
+            start = i if start is None else start
+        elif start is not None:
+            if (i - start) * step >= min_s:
+                out.append((start * step, i * step))
+            start = None
+    return out
+
+
 def scan(video: Path, project: Path) -> list[Path]:
     """Score every second, write project/scan/chunk_NN.md (one per 10 min), return their paths."""
     video, project = Path(video), Path(project)
@@ -156,6 +173,7 @@ def scan(video: Path, project: Path) -> list[Path]:
     wav = None
     if info["has_audio"]:
         wav = hearing.extract_wav(video, project / "audio.wav")
+    silences = _silences(wav)
     loud_z = _loud(wav, n)
     loud = np.clip(loud_z / 3.0, 0, 1)
     hype, why = _words(words, n, loud_z)
@@ -202,6 +220,10 @@ def scan(video: Path, project: Path) -> list[Path]:
             lines.append(" ".join(p for p in (clock(math.floor(float(g["start"]))), mark, g["text"].strip()) if p))
         if not here:
             lines.append("(nobody talks in this part)")
+        quiet_here = [(q0, q1) for q0, q1 in silences if lo <= q0 < hi]
+        if quiet_here:
+            lines += ["", "🔇 Silent stretches (muted audio or dead air): keep every Short clear of these:"]
+            lines += [f"- {clock(q0)}-{clock(q1)} ({q1 - q0:.0f} s)" for q0, q1 in quiet_here]
         lines += ["", "Hot seconds (best first, score 0-1):"]
         order = sorted(range(lo, hi), key=lambda s: -score[s])
         best: list[int] = []

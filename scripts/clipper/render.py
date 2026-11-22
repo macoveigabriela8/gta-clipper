@@ -184,6 +184,52 @@ def _cover(mp4: Path, jpg: Path, at: float) -> None:
          "-q:v", "2", str(jpg)])
 
 
+def _trim_silence(video: Path, a: float, b: float, quiet_db: float = -50.0) -> tuple[float, float, str, str]:
+    """Drop dead silence at the start and end of a moment (Twitch clips can open with seconds of muted audio),
+    keeping 0.2 s of air and never less than 5 s. Silence of 2 s or more INSIDE the moment is not cut (the picture
+    may be the payoff): it comes back as a problem note so the moment gets moved or split.
+    Returns (a, b, trim note, problem note)."""
+    step = 0.25
+    p = subprocess.run([ffmpeg(), "-hide_banner", "-nostdin", "-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", str(video),
+                        "-vn", "-af", "aresample=48000,asetnsamples=n=12000,astats=metadata=1:reset=1,"
+                        "ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-", "-f", "null", "-"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    levels = []
+    for line in (p.stdout or "").splitlines():
+        if "RMS_level=" in line:
+            v = line.split("=", 1)[1].strip()
+            levels.append(-200.0 if "inf" in v else float(v))
+    loud = [i for i, v in enumerate(levels) if v > quiet_db]
+    if not loud:
+        return a, b, "", "There's no sound at all in this moment (muted?). Pick another part."
+    gaps, run_start = [], None                      # silent runs between the first and last sound
+    for i in range(loud[0], loud[-1] + 1):
+        if levels[i] <= quiet_db:
+            run_start = i if run_start is None else run_start
+        elif run_start is not None:
+            if (i - run_start) * step >= 2.0:
+                gaps.append((run_start * step, (i - run_start) * step))
+            run_start = None
+    # Snappy edges: more than 0.25 s of dead air at the start or 0.9 s at the end gets trimmed (a 0.1 s breath stays).
+    lead = max(0.0, loud[0] * step - 0.1)
+    tail = max(0.0, (len(levels) - 1 - loud[-1]) * step - 0.1)
+    if lead <= 0.25:
+        lead = 0.0
+    if tail <= 0.9:
+        tail = 0.0
+    if (b - tail) - (a + lead) < 5.0:
+        lead = tail = 0.0
+    problem = ""
+    if gaps:
+        where = ", ".join(f"{g:.0f} s ({d:.1f} s long)" for g, d in ((g - lead, d) for g, d in gaps))
+        problem = (f"Silent in the middle at {where} of this Short (muted or dead air). "
+                   "Move the window to skip it, or split it into two moments, then make it again.")
+    if not lead and not tail:
+        return a, b, "", problem
+    parts = [f"{x:.1f} s of silence at the {w}" for x, w in ((lead, "start"), (tail, "end")) if x]
+    return a + lead, b - tail, "Trimmed " + " and ".join(parts) + ".", problem
+
+
 def build_short(video: Path, a: float, b: float, hook: str, caption: str, words: list[dict], cam: dict | None,
                 out_dir: Path, name: str) -> dict:
     """Render one Short. Writes out_dir/name.mp4, .jpg (cover), .txt (post text) and .json (this result)."""
@@ -205,6 +251,11 @@ def build_short(video: Path, a: float, b: float, hook: str, caption: str, words:
             b = info["dur"]
         if b - a < 1.0:
             raise RuntimeError(f"the moment is too short ({b - a:.1f} s)")
+        silence_problem = ""
+        if info["has_audio"]:
+            a, b, trim_note, silence_problem = _trim_silence(video, a, b)
+            if trim_note:
+                notes.append(trim_note)
         result["seconds"] = round(b - a, 2)
         with tempfile.TemporaryDirectory(prefix="gtaclip-") as tmp:
             made = _render(video, a, b, hook, words, cam, info, mp4, Path(tmp))
@@ -213,6 +264,9 @@ def build_short(video: Path, a: float, b: float, hook: str, caption: str, words:
         _cover(mp4, jpg, min(COVER_AT, (b - a) / 2))
         ok, qc_notes, measured = qc.check(mp4, b - a, setting("max_short_s"))
         notes.extend(qc_notes)
+        if silence_problem:
+            notes.append(silence_problem)
+            ok = False
         result["ok"] = ok
         log(f"  {name}: {b - a:.1f} s, {measured.get('lufs')} LUFS, "
             f"{'ok' if ok else 'needs a look'} ({time.time() - t_start:.0f} s to make)")
