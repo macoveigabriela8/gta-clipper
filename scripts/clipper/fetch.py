@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 from .frames import video_info
-from .paths import INPUTS, PROJECTS, ffmpeg, load, log, save, setting, slug, today
+from .paths import INPUTS, PROJECTS, WORK, ffmpeg, load, log, save, setting, slug, today
 
 
 def _ydl_opts(out_dir: Path) -> dict:
@@ -40,6 +42,23 @@ _YT_CLIENTS = [None, ["tv", "web_safari"], ["mweb"], ["web_embedded"], ["android
 _OTHER_TRIES = [None, "ffmpeg"]
 
 
+def _ffmpeg_on_path() -> None:
+    """Before yt-dlp lets ffmpeg do a download (a Twitch stream its own stitcher can't read, or cutting the first
+    40 min of a long stream) it checks for a program called "ffmpeg" on PATH; it ignores the ffmpeg we hand it.
+    A fresh Windows PC has none (a Mac with Homebrew does), so yt-dlp quietly falls back and fails. Put ours there."""
+    if shutil.which("ffmpeg"):
+        return
+    d = WORK / ".bin"
+    d.mkdir(parents=True, exist_ok=True)
+    exe = d / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    if not exe.exists():
+        try:
+            os.link(ffmpeg(), exe)
+        except OSError:
+            shutil.copy2(ffmpeg(), exe)
+    os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
+
+
 def _drop_parts() -> None:
     """Remove half-downloaded files before the next try. Windows may still hold one open for a moment: let go of it,
     and if it is still locked, leave it (the next try writes its own)."""
@@ -55,6 +74,7 @@ def _drop_parts() -> None:
 def download(url: str, minutes: float = 40) -> tuple[Path, str]:
     import yt_dlp
     INPUTS.mkdir(parents=True, exist_ok=True)
+    _ffmpeg_on_path()
     is_yt = "youtu" in url.lower()
     last_err = None
     for clients in (_YT_CLIENTS if is_yt else _OTHER_TRIES):
@@ -85,6 +105,9 @@ def download(url: str, minutes: float = 40) -> tuple[Path, str]:
             log(f"  that didn't work ({str(e).splitlines()[0][:90]}), trying another way…")
             _drop_parts()
     else:
+        if is_yt and "confirm your age" in str(last_err).lower():
+            raise SystemExit("That YouTube video is age-restricted: YouTube only plays it to a signed-in grown-up "
+                             "account, so nothing can download it. Pick another video, or give me the video file.")
         if is_yt:                              # rate limits usually clear in seconds: one calm retry, then paid
             log("  YouTube is limiting downloads right now: waiting 20 s and trying once more…")
             time.sleep(20)
@@ -123,8 +146,15 @@ def _paid_youtube(url: str, token: str) -> Path:
     body = json.dumps({"videos": [{"url": url}], "startUrls": [{"url": url}], "preferredQuality": "720p",
                        "preferredFormat": "mp4", "storeInKVStore": True}).encode()
     req = urllib.request.Request(_APIFY, body, {"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=900) as r:
-        items = json.loads(r.read().decode("utf-8") or "[]")
+    try:
+        with urllib.request.urlopen(req, timeout=900) as r:
+            items = json.loads(r.read().decode("utf-8") or "[]")
+    except urllib.error.HTTPError as e:
+        why = "the Apify token was refused (wrong or expired: make a new one at apify.com)" if e.code in (401, 403) \
+            else f"Apify answered {e.code}"
+        raise SystemExit(f"The paid backup didn't work: {why}. Try a Twitch or Kick link, or give me the video file.")
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise SystemExit(f"The paid backup couldn't be reached ({e}). Try again later, or give me the video file.")
     link = (items or [{}])[0].get("downloadedFileUrl")
     if not link:
         raise SystemExit("The paid backup returned no file. Try another link or give me the video file.")
