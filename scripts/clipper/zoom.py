@@ -107,9 +107,10 @@ def outside(times: list[float], win: tuple[float, float] | None) -> list[float]:
 
 
 def _cuts(mp4: Path, a: float, b: float) -> list[tuple[float, float]]:
-    """(Short second, score) of every hard cut of the whole picture between a and b."""
+    """(Short second, score) of every hard cut of the whole picture between a and b. Threshold 8, not 14: the cut
+    from dark night gameplay to the face scores only ~10."""
     p = subprocess.run([ffmpeg(), "-hide_banner", "-nostdin", "-nostats", "-ss", f"{a:.3f}", "-t", f"{b - a:.3f}",
-                        "-i", str(mp4), "-an", "-vf", "scale=160:-2,scdet=threshold=14", "-f", "null", "-"],
+                        "-i", str(mp4), "-an", "-vf", "scale=160:-2,scdet=threshold=8", "-f", "null", "-"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     found = re.findall(r"lavfi\.scd\.score:\s*([\d.]+),\s*lavfi\.scd\.time:\s*([\d.]+)", p.stderr or "")
     return [(round(a + float(t), 2), float(s)) for s, t in found]
