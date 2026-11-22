@@ -19,6 +19,7 @@
   gc get <link or file>            download, listen, write scan/chunk_*.md      [--minutes 40]
   gc look <video> --from 6:40 --to 7:16 [--every 2]    contact sheet of that window
   gc make [project] [--no-open]    render every moment in plan.json, open the review page
+  gc formats [--no-open]           open a picture of the 3 kinds of Short (shown to the user after setup)
   gc review [day]                  rebuild and open the review page of a day
 
 Run it as: uv run --python 3.12 <skill folder>/scripts/gc.py <command>
@@ -302,6 +303,15 @@ def cmd_make(a) -> int:
     return 0 if made else 1
 
 
+def cmd_formats(a) -> int:
+    from clipper import formats
+    out = formats.picture(paths.WORK / "formats.png")
+    log(f"✓ the 3 kinds of Short, side by side: {out}")
+    if not a.no_open:
+        paths.open_path(out)
+    return 0
+
+
 def cmd_review(a) -> int:
     from clipper import gallery
     day = Path(a.day).name if a.day else paths.today()
@@ -330,11 +340,13 @@ def main(argv: list[str] | None = None) -> int:
     mk = sub.add_parser("make", help="render every moment of a project's plan.json")
     mk.add_argument("project", nargs="?", help="project folder or name (newest when left out)")
     mk.add_argument("--no-open", action="store_true", help="don't open the review page")
+    fm = sub.add_parser("formats", help="open a picture of the 3 kinds of Short (to show the user)")
+    fm.add_argument("--no-open", action="store_true", help="only write the picture")
     rv = sub.add_parser("review", help="rebuild and open the review page")
     rv.add_argument("day", nargs="?", help="YYYY-MM-DD (today when left out)")
     a = ap.parse_args(argv)
     commands = {"setup": cmd_setup, "doctor": cmd_doctor, "get": cmd_get, "look": cmd_look, "make": cmd_make,
-                "review": cmd_review}
+                "formats": cmd_formats, "review": cmd_review}
     try:
         return commands[a.cmd](a) or 0
     except KeyboardInterrupt:
