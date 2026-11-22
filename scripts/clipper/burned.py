@@ -98,9 +98,10 @@ def keep_share(found: dict | None) -> float:
     return round(max(1.0 - MAX_CUT, found["top"] - LINE_ROOM), 3)
 
 
-def left_in_short(mp4: Path, dur: float, top: float = 0.72) -> dict | None:
+def left_in_short(mp4: Path, dur: float, skip: tuple[float, float] | None = None, top: float = 0.72) -> dict | None:
     """QA on the finished Short: text rows still showing low in the gameplay (under our captions)?"""
     times = [float(t) for t in np.linspace(0.4, max(0.5, dur - 0.4), 16)]
+    times = [t for t in times if not (skip and skip[0] <= t <= skip[1])] or times   # not inside a reaction zoom
     frames = grab_frames(Path(mp4), times, 540)
     real, hit = _steady_rows([text_rows(f, 0.0, 1.0, top) for f in frames])
     if not real or hit < 2:

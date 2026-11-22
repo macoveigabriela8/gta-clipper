@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import burned
+from . import burned, zoom
 from .frames import grab_frames, video_info
 from .paths import H, W, ffmpeg, seconds
 
@@ -56,12 +56,12 @@ def _measure(mp4: Path, has_audio: bool) -> dict:
     }
 
 
-def _look_at_bands(mp4: Path, dur: float, cam: bool) -> dict:
+def _look_at_bands(mp4: Path, dur: float, cam: bool, skip: tuple[float, float] | None = None) -> dict:
     """Frames after the hook: is the top band a webcam (a whole face in most frames, the same room behind it:
     change ~0.02-0.06, a game scene or a zoom changes more), and how dark is the gameplay?"""
     from .facecam import _faces
     start = 3.2 if dur > 7 else 0.3                  # after the hook pill
-    times = [float(t) for t in np.linspace(start, max(start + 0.1, dur - 0.3), 12)]
+    times = zoom.outside([float(t) for t in np.linspace(start, max(start + 0.1, dur - 0.3), 12)], skip)
     frames = grab_frames(mp4, times, 540)
     if not frames:
         return {"of": 0}
@@ -210,12 +210,12 @@ def check(mp4: Path, want_s: float, max_s: float | None = None, ctx: dict | None
     add("frozen", "fail", not m["freezes"],
         "; ".join(f"The picture stands still for {d:.1f} s from {s:.1f} s (frozen stream or a pause menu)."
                   for s, d in m["freezes"]))
-    left = burned.left_in_short(mp4, dur)
+    left = burned.left_in_short(mp4, dur, zoom.skip(ctx))
     add("no_double_captions", "fail", left is None,
         f"Text still shows low in the gameplay ({left['frames']} of {left['of']} frames, at {left['top']:.0%} of the "
         'height): game subtitles or stream captions next to ours. Set "drop_bottom" on this moment (e.g. 0.25).'
         if left else "")
-    look = _look_at_bands(mp4, dur, bool(ctx.get("cam")))
+    look = _look_at_bands(mp4, dur, bool(ctx.get("cam")), zoom.skip(ctx))
     of = look.get("of") or 0
     if ctx.get("cam") and of:
         hit, change = look["face_frames"], look["change"]
@@ -237,6 +237,7 @@ def check(mp4: Path, want_s: float, max_s: float | None = None, ctx: dict | None
 
     if not ctx.get("top5"):                  # a Top 5 is five moments: it gets per-piece checks instead (top5.py)
         checks += _cut_checks(ctx, dur)
+    checks += zoom.checks(mp4, ctx, dur)        # format 4 (reaction zoom) only
     ok = all(c["pass"] for c in checks if c["level"] == "fail")
     notes = [("✗ " if c["level"] == "fail" else "! ") + c["say"] for c in checks if not c["pass"] and c["say"]]
     return ok, notes, measured, checks

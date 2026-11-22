@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import burned, overlays, qc
+from . import burned, overlays, qc, zoom
 from .frames import video_info
 from .paths import FPS, H, W, ffmpeg, log, run, save, setting
 
@@ -103,11 +103,11 @@ def game_box(sw: int, sh: int, cam_on: bool, cam_raw: dict | None, keep: float =
 
 def _graph(sw: int, sh: int, cam: dict | None, cam_raw: dict | None, dur: float, cap_input: int | None,
            hook_input: int, hook_xy: tuple[int, int], hook_s: float, audio_src: str, normalise: bool,
-           keep: float = 1.0) -> str:
+           keep: float = 1.0, zoom_win: dict | None = None) -> str:
     f = []
     if cam:
         g = game_box(sw, sh, True, cam_raw, keep)
-        f.append(f"[0:v]fps={FPS},split=2[s1][s2]")
+        f.append(f"[0:v]fps={FPS},split={3 if zoom_win else 2}[s1][s2]" + ("[s3]" if zoom_win else ""))
         f.append(f"[s1]crop={cam['w']}:{cam['h']}:{cam['x']}:{cam['y']},scale={W}:{CAM_H}:flags=bicubic,setsar=1[top]")
         f.append(f"[s2]crop={g['w']}:{g['h']}:{g['x']}:{g['y']},scale={W}:{GAME_H}:flags=bicubic,setsar=1[bot]")
         f.append("[top][bot]vstack=inputs=2[base]")
@@ -117,10 +117,13 @@ def _graph(sw: int, sh: int, cam: dict | None, cam_raw: dict | None, dur: float,
         f.append(f"[0:v]fps={FPS},crop={g['w']}:{g['h']}:{g['x']}:{g['y']},scale={W}:{H}:flags=bicubic,setsar=1[base]")
         cap_mid = round(H * CAPTION_Y_NO_CAM)
     last = "base"
+    if zoom_win:                                       # format 4: the face fills the screen at the payoff
+        f.append(zoom.graph("s3", last, "zoomed", zoom_win))
+        last = "zoomed"
     if cap_input is not None:
         cap_y = cap_mid - overlays.CAP_BAND_H // 2
         f.append(f"[{cap_input}:v]format=rgba[cap]")
-        f.append(f"[{last}][cap]overlay=0:{cap_y}:eof_action=pass[withcap]")
+        f.append(f"[{last}][cap]overlay=0:{zoom.caption_y(cap_y, zoom_win, overlays.CAP_BAND_H)}:eof_action=pass[withcap]")
         last = "withcap"
     fade_at = max(0.0, hook_s - HOOK_FADE)
     f.append(f"[{hook_input}:v]format=rgba,fade=t=out:st={fade_at:.3f}:d={HOOK_FADE}:alpha=1[hook]")
@@ -155,10 +158,11 @@ def _loudness_fix(video: Path, a: float, dur: float) -> str:
 
 
 def _render(video: Path, a: float, b: float, hook: str, words: list[dict], cam_raw: dict | None, info: dict,
-            mp4: Path, work: Path, keep: float = 1.0, hook_hold: float | None = None) -> dict:
+            mp4: Path, work: Path, keep: float = 1.0, hook_hold: float | None = None, moment: dict | None = None) -> dict:
     dur = b - a
     sw, sh = info["w"], info["h"]
     cam = fit_cam(cam_raw, sw, sh)
+    zoom_win, zoom_note = zoom.window(moment, a, b, cam, video, sw)
     hook_s = min(float(hook_hold or setting("hook_seconds") or 3.0), dur)   # hook_hold: the pill stays longer
     hook_png, hx, hy = overlays.hook_png(hook, work / "hook.png")
     cap_list = overlays.caption_track(words, a, b, work)
@@ -178,13 +182,13 @@ def _render(video: Path, a: float, b: float, hook: str, words: list[dict], cam_r
         audio_src, normalise = f"{idx}:a", None
         idx += 1
     avoid = {k: float(cam_raw[k]) for k in ("x", "y", "w", "h")} if cam else None
-    graph = _graph(sw, sh, cam, avoid, dur, cap_input, hook_input, (hx, hy), hook_s, audio_src, normalise, keep)
+    graph = _graph(sw, sh, cam, avoid, dur, cap_input, hook_input, (hx, hy), hook_s, audio_src, normalise, keep, zoom_win)
     cmd += ["-filter_complex", graph, "-map", "[vout]", "-map", "[aout]", "-t", f"{dur:.3f}",
             "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
             "-profile:v", "high", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
             "-movflags", "+faststart", str(mp4)]
     run(cmd)
-    return {"cam": cam, "captions": bool(cap_list)}
+    return {"cam": cam, "captions": bool(cap_list), "zoom": zoom_win, "zoom_note": zoom_note}
 
 
 def _loudness_of(mp4: Path) -> tuple[float | None, float | None]:
@@ -387,7 +391,8 @@ def build_short(video: Path, a: float, b: float, hook: str, caption: str, words:
             notes.append(keep_note)
         result["keep"] = keep
         with tempfile.TemporaryDirectory(prefix="gtaclip-") as tmp:
-            made = _render(video, a, b, hook, words, cam, info, mp4, Path(tmp), keep, (moment or {}).get("hook_hold"))
+            made = _render(video, a, b, hook, words, cam, info, mp4, Path(tmp), keep, (moment or {}).get("hook_hold"),
+                           moment)
         if cam and not made["cam"]:
             notes.append("The facecam box didn't fit the video, so the gameplay fills the whole height.")
         if info["has_audio"]:
@@ -397,7 +402,8 @@ def build_short(video: Path, a: float, b: float, hook: str, caption: str, words:
         _cover(mp4, jpg, min(COVER_AT, (b - a) / 2))
         ctx = {"a": a, "b": b, "words": words, "hook": hook, "cam": bool(made["cam"]), "source_dur": info["dur"],
                "moment": moment or {}, "silence_problem": silence_problem,
-               "cuts": [c for c in cuts if a + 0.3 < c < b - 0.3], "cuts_on_cam": cuts_on_cam}
+               "cuts": [c for c in cuts if a + 0.3 < c < b - 0.3], "cuts_on_cam": cuts_on_cam,
+               "zoom": made.get("zoom"), "zoom_note": made.get("zoom_note")}
         ok, qc_notes, measured, checks = qc.check(mp4, b - a, setting("max_short_s"), ctx)
         notes.extend(qc_notes)
         result["ok"] = ok

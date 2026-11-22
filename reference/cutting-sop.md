@@ -122,3 +122,32 @@ every frame, the real webcam on top, one set of captions, each last frame on its
 | `webcam` (#N) | Give `"cam"` by hand on item #N (or `"facecam": false`). |
 | `item_edges` (!) | Move that edge into the gap between two words. |
 | `whoosh` (!) | Make it again; still off = the pieces are near-silent (pick louder moments). |
+
+## 8. Reaction zoom (the face takes over at the payoff)
+
+Pick it when the streamer's **face is the punchline**: a scream, a laugh, a stunned stare right as the payoff hits
+(the crash, the kill, the reveal). Not when the payoff is only on the game screen, and never without a webcam.
+Add `"zoom": true` to that moment (it needs `"payoff_at"`). At the payoff the Short cuts to the face, full screen,
+with a slow push (1.00 → 1.06) for 1.5 s, then cuts back to the split layout; if that would leave under 1 s, it
+stays on the face to the end. A moment without `"zoom"` renders exactly as before.
+
+| Rule | Why | QA check |
+|---|---|---|
+| The zoom starts on `payoff_at`, measured on the finished Short (the cut to the face within 0.3 s), and cuts back when it returns. | Early, it spoils the joke; late, the reaction is gone. | ✗ `zoom_window` |
+| The face fills the screen: in 3 frames inside the zoom, 2+ show a face 30-115% of the screen's width, centred (measured on the webcam pixels the zoom crops: the detector can't read a face blown up 8x). | A zoom on a wall, a hand or half a face is a mistake. | ✗ `zoom_face` |
+| The webcam is blown up 9x or less. | A tiny webcam turns to mush full screen. | ! `zoom_sharp` |
+| At least 0.8 s of Short after the payoff, a webcam, a `payoff_at`. | Otherwise no zoom is made. | ! `zoom` |
+| Our captions and the hook stay on top of the zoom; the captions drop to 80% of the height while it shows. | At the usual seam a full-screen face has its eyes right there. | eye check |
+
+The § 4 band checks (`webcam`, `bright_enough`, `no_double_captions`) don't sample frames inside the zoom (there is no
+split layout there); every other check runs on the whole Short.
+
+**Eye check:** the last-4-s row of `<name>_qa.jpg` holds the zoom: the face fills the screen, eyes and mouth visible,
+not cut off, not a blurry mess, captions low (on the chin / chest), not over the eyes.
+
+| Fails | Fix |
+|---|---|
+| `zoom_window` | `"payoff_at"` is off: find the exact second (`gc look --every 0.5`), make it again. |
+| `zoom_face` | The cam box misses the face: give `"cam"` by hand (the whole webcam), make it again. Still failing: remove `"zoom"`. |
+| `zoom_sharp` (!) or a mushy face on the QA sheet | Remove `"zoom"` from that moment rather than ship a blurry face. |
+| `zoom` (!) | Read the note: add `"payoff_at"`, end 1-3 s after it, or remove `"zoom"` (no webcam). |
