@@ -189,6 +189,7 @@ def cmd_make(a) -> int:
         f" (about 5-20 s each)")
     made = 0
     run_t0, done_n = time.time(), 0
+    qa_rows: list[tuple[str, bool, str]] = []
     for i, m in enumerate(moments, 1):
         try:
             start, end = paths.seconds(m["a"]), paths.seconds(m["b"])
@@ -222,7 +223,7 @@ def cmd_make(a) -> int:
         name = f"{i:02d}_{paths.slug(hook)}"
         t0 = time.time()
         try:
-            info = render.build_short(video, start, end, hook, caption, words, cam, out_dir, name)
+            info = render.build_short(video, start, end, hook, caption, words, cam, out_dir, name, moment=m)
         except Exception as e:
             log(f"✗ moment {i} failed: {type(e).__name__}: {e}")
             continue
@@ -230,6 +231,7 @@ def cmd_make(a) -> int:
             log(f"✗ moment {i}: the renderer gave no video back")
             continue
         _write_check(Path(info["mp4"]), info, m, cam, t0)
+        qa_rows.append((Path(info["mp4"]).name, bool(info.get("ok")), str(info.get("qa_sheet") or "")))
         made += 1
         secs = info.get("seconds") or 0
         log(f"{'✓' if info.get('ok') else '!'} {info['mp4']} ({float(secs):.1f} s long, made in {time.time() - t0:.0f} s)")
@@ -241,6 +243,13 @@ def cmd_make(a) -> int:
             each = (time.time() - run_t0) / done_n
             log(f"  Short {i} of {len(moments)} done · about {max(1, round(each * rest))} s for the other {rest}")
     page = gallery.build()
+    if qa_rows:
+        good = sum(1 for _, ok, _ in qa_rows if ok)
+        log(f"\nQA: {good} of {len(qa_rows)} passed the automatic checks"
+            + ("" if good == len(qa_rows) else " · fix the NEEDS A LOOK ones (notes above) and make them again"))
+        log("QA sheets to look at before telling the user (hook, middle, last 4 s):")
+        for name, ok, sheet in qa_rows:
+            log(f"  {'✓' if ok else '✗'} {sheet or name}")
     log(f"\n{made} of {len(moments)} Shorts made in {out_dir}")
     log(f"Review page: {page}")
     if not a.no_open:

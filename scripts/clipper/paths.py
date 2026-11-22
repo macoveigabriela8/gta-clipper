@@ -23,7 +23,7 @@ HOOK_FONT = FONTS / "Montserrat-Black.ttf"
 W, H, FPS = 1080, 1920, 30
 
 _DEFAULTS = {"whisper_model": "base.en", "hook_seconds": 3.0, "max_short_s": 59,
-             "hashtags": "#gta #gtarp #gaming #shorts"}
+             "hashtags": "#gta #gtarp #gaming #shorts", "drop_bottom": "auto"}
 _SETTINGS_FILE = WORK / "settings.json"
 
 

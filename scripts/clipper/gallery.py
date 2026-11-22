@@ -46,8 +46,10 @@ def _notes(data) -> str:
         return f"<pre>{html.escape(json.dumps(data, indent=1, ensure_ascii=False))}</pre>" if data else ""
     parts = []
     if "ok" in data:
-        parts.append('<div class="ok">✓ checks passed</div>' if data.get("ok")
-                     else '<div class="warn">! check this one before posting</div>')
+        qa = data.get("qa") if isinstance(data.get("qa"), list) else []
+        score = f" ({sum(1 for c in qa if c.get('pass'))}/{len(qa)} QA checks)" if qa else ""
+        parts.append(f'<div class="ok">✓ QA passed{score}</div>' if data.get("ok")
+                     else f'<div class="warn">✗ needs a look before posting{score}</div>')
     notes = data.get("notes") or []
     if isinstance(notes, str):
         notes = [notes]

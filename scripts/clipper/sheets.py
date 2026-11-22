@@ -47,9 +47,17 @@ def contact_sheet(video: Path, out_jpg: Path, start: float, end: float, every: f
     while t <= end + 1e-6:
         times.append(round(t, 3))
         t += every
+    title = f"{video.name}  ·  {stamp(start)} - {stamp(end)}  ·  one frame every {every:g} s"
+    return sheet_at(video, out_jpg, times, title, stamp, cols, width)
+
+
+def sheet_at(video: Path, out_jpg: Path, times: list[float], title: str, label=stamp, cols: int = 6,
+             width: int = 320) -> Path:
+    """A grid of the frames at exactly these times, each with label(time) above it."""
+    video, out_jpg = Path(video), Path(out_jpg)
     frames = grab_frames(video, times, width)
     if not frames:
-        raise SystemExit(f"Could not read any frame from {video} between {stamp(start)} and {stamp(end)}.")
+        raise SystemExit(f"Could not read any frame from {video}.")
     times = times[:len(frames)]
     fw, fh = frames[0].size
     cols = max(1, min(cols, len(frames)))
@@ -57,14 +65,13 @@ def contact_sheet(video: Path, out_jpg: Path, start: float, end: float, every: f
     pad, label_h, title_h = 6, 26, 40
     sheet = Image.new("RGB", (cols * (fw + pad) + pad, title_h + rows * (label_h + fh + pad) + pad), BG)
     d = ImageDraw.Draw(sheet)
-    d.text((pad + 4, 10), f"{video.name}  ·  {stamp(start)} - {stamp(end)}  ·  one frame every {every:g} s",
-           fill=INK, font=_font(20))
+    d.text((pad + 4, 10), title, fill=INK, font=_font(20))
     small = _font(17)
     for i, (img, t) in enumerate(zip(frames, times)):
         r, c = divmod(i, cols)
         x = pad + c * (fw + pad)
         y = title_h + r * (label_h + fh + pad)
-        d.text((x + 2, y + 3), stamp(t), fill=INK, font=small)
+        d.text((x + 2, y + 3), label(t), fill=INK, font=small)
         sheet.paste(img.resize((fw, fh)) if img.size != (fw, fh) else img, (x, y + label_h))
     out_jpg.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(out_jpg, "JPEG", quality=85)

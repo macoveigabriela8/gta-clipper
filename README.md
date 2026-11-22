@@ -20,6 +20,8 @@ Works with YouTube, Twitch (VODs and clips), Kick, TikTok, or a video file on yo
 ## What you get
 
 2-3 Shorts per stream (15-45 s, 1080x1920) in `~/GTAClipper/shorts/<date>/`, each with a post caption, and a review
-page that opens when they're done. Watch each one before you post it.
+page that opens when they're done. Every Short passes an automatic QA first (sound level, dead air, no double
+captions, the real webcam on top, an ending that lands on the payoff), and Claude looks at its frames.
+The rules are in `reference/cutting-sop.md`. Watch each one before you post it.
 
 Fonts: Anton and Montserrat, SIL Open Font License (`assets/fonts/OFL.txt`).
