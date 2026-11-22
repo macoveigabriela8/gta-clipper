@@ -304,9 +304,10 @@ def cmd_make(a) -> int:
 
 
 def cmd_formats(a) -> int:
-    from clipper import formats
-    out = formats.picture(paths.WORK / "formats.png")
-    log(f"✓ the 3 kinds of Short, side by side: {out}")
+    out = paths.SKILL_DIR / "assets" / "formats.jpg"          # real frames of the 3 kinds, shipped with the skill
+    if not out.is_file():
+        raise SystemExit(f"The formats picture is missing ({out}). Reinstall the skill.")
+    log(f"✓ the 3 kinds of Short, side by side (real frames): {out}")
     if not a.no_open:
         paths.open_path(out)
     return 0

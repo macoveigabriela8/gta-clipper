@@ -3,6 +3,8 @@
 One stream link in, finished vertical Shorts out: the streamer's face on top, the game below, word captions, and a
 black hook pill as the first thing on screen. Free, runs on your own Mac or Windows PC.
 
+![The 3 kinds of Short: streamer moments, full gameplay, Top 5 countdown](assets/formats.jpg)
+
 ## Install: paste this one sentence into the Claude app (Code tab)
 
 > Install the GTA Clipper skill from https://github.com/macoveigabriela8/gta-clipper and set it up, then clip this: PASTE-YOUR-STREAM-LINK

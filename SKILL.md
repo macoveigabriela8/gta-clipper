@@ -23,8 +23,8 @@ This skill's folder is the one holding this SKILL.md (normally `~/.claude/skills
    If `uv run --python 3.12` fails on Windows with a link/shortcut error, run `uv python find 3.12` and pass that
    full python.exe path to `--python` instead (some Windows Servers break uv's Python shortcut).
 2. `gc setup` — installs the libraries and downloads the speech model once (about 1-2 minutes). Wait for "Ready".
-   Then SHOW the user the 3 kinds: `gc formats` opens a picture of them side by side on their screen (it also
-   prints its path: give it as a link). Say with it: "This is what I can make: 1 streamer moments (face on top,
+   Then SHOW the user the 3 kinds: `gc formats` opens `assets/formats.jpg` (real frames of each kind, side by
+   side) on their screen; also give its path as a link. Say with it: "This is what I can make: 1 streamer moments (face on top,
    game below), 2 full gameplay (when there's no webcam), 3 a Top 5 countdown. I'll pick what fits your stream."
 3. `gc get "<link or file>"` — downloads the video (long streams: the first 40 min; `--minutes 90` for more), listens
    to it and writes `scan/chunk_*.md` in a new project under `~/GTAClipper/projects/`.
