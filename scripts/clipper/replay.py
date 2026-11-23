@@ -30,7 +30,7 @@ def zoom_box(g: dict) -> dict:
 
 
 def add(video: Path, mp4: Path, a: float, b: float, moment: dict, cam_raw: dict | None, info: dict, keep: float,
-        work: Path) -> dict:
+        work: Path, top: float = 0.0) -> dict:
     """Append the replay to the finished main part `mp4` (the file is replaced by main + replay).
     Returns what checks() and qa_sheet() need; {"error": ..., "main_s"} when there's nothing to replay."""
     video, mp4 = Path(video), Path(mp4)
@@ -46,7 +46,7 @@ def add(video: Path, mp4: Path, a: float, b: float, moment: dict, cam_raw: dict 
     sw, sh = info["w"], info["h"]
     cam = render.fit_cam(cam_raw, sw, sh)              # exactly render._render / _graph's numbers
     avoid = {k: float(cam_raw[k]) for k in ("x", "y", "w", "h")} if cam else None
-    g = render.game_box(sw, sh, bool(cam), avoid, keep)
+    g = render.game_box(sw, sh, bool(cam), avoid, keep, top)
     z = zoom_box(g)
     dur = (rb - ra) * SLOW
     pill, hx, hy = overlays.hook_png(TEXT, work / "replay_pill.png")
@@ -85,9 +85,10 @@ def _gray(img, size: tuple[int, int]) -> np.ndarray:
 
 
 def checks(mp4: Path, rep: dict) -> list[dict]:
-    """The replay's own rules, in qc.py's shape (all fail-level)."""
+    """The replay's own rules (levels in qc.RULES)."""
+    from .qc import result
     out: list[dict] = []
-    add = lambda cid, ok, say: out.append({"check": cid, "level": "fail", "pass": bool(ok), "say": say})
+    add = lambda cid, ok, say="": out.append(result(cid, ok, say))
     if "replay_s" not in rep:
         add("replay_length", False, rep.get("error", "The replay wasn't made.") +
             ' Give the moment a "payoff_at" inside it, or drop "replay".')

@@ -100,7 +100,8 @@ Write it like you'd text a friend. No emoji, no hashtags in the hook.
 - No facecam found → the Short uses the gameplay full height (that's fine). Wrong face picked → set
   `"facecam": false` on that moment, or give `"cam": {"x":..,"y":..,"w":..,"h":..}` in the video's pixels.
 - Game subtitles or stream captions still showing under ours → `"drop_bottom": 0.25` on that moment (the share of
-  the picture's height cut off the bottom; the tool finds most of them by itself).
+  the picture's height cut off the bottom; the tool finds most of them by itself). A black cutscene bar still at the
+  top → `"drop_top": 0.12`.
 - A link fails → `gc get` already tries five YouTube players, waits and tries again. Still failing: YouTube is
   rate-limiting this computer. Offer, in this order: a Twitch / Kick link of the same stream, trying again in a few
   minutes, or the video file. Optional paid backup for YouTube: if the user has an Apify token, save it as

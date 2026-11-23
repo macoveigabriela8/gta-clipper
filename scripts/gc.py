@@ -185,7 +185,11 @@ def _cam_for(m: dict, video: Path, start: float, end: float, default: dict | Non
         log("  facecam: off for this moment")
         return None, True
     cam = facecam.detect(video, start, end)
-    log(f"  facecam: found ({cam['w']}x{cam['h']} at {cam['x']},{cam['y']})" if cam
+    how = ""
+    if cam:
+        how = ("the webcam's edges measured" if cam.get("measured") else "sized from the face") + \
+              (", read from the stream around this moment" if cam.get("nearby") else "")
+    log(f"  facecam: found ({cam['w']}x{cam['h']} at {cam['x']},{cam['y']}; {how})" if cam
         else "  facecam: none found, gameplay goes full height")
     return cam, True
 

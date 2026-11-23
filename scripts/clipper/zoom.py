@@ -121,11 +121,12 @@ def checks(mp4: Path, ctx: dict, dur: float) -> list[dict]:
     moment = ctx.get("moment") or {}
     if not moment.get("zoom"):
         return []
+    from .qc import result                                 # (here: qc imports this module)
     out: list[dict] = []
-    add = lambda cid, level, ok, say: out.append({"check": cid, "level": level, "pass": bool(ok), "say": say})
+    add = lambda cid, ok, say="": out.append(result(cid, ok, say))
     z = ctx.get("zoom")
     if not z:
-        add("zoom", "warn", False, (ctx.get("zoom_note") or "No zoom was made.") +
+        add("zoom", False, (ctx.get("zoom_note") or "No zoom was made.") +
             ' Fix it, or remove "zoom" from the moment.')
         return out
     t0, t1 = z["t0"], z["t1"]
@@ -136,7 +137,7 @@ def checks(mp4: Path, ctx: dict, dur: float) -> list[dict]:
     back = z["ends_on_face"] or any(abs(c[0] - t1) <= START_TOL for c in cuts)
     inside = 0 <= t0 < t1 <= dur + 0.05
     good = start is not None and abs(start - pay) <= START_TOL and back and inside
-    add("zoom_window", "fail", good,
+    add("zoom_window", good,
         "" if good else f"The zoom should cut in on the payoff ({pay:.1f} s in the Short) and "
         f"{'stay to the end' if z['ends_on_face'] else f'cut back at {t1:.1f} s'}; measured: cut in at "
         f"{'none found' if start is None else f'{start:.1f} s'}, cut back {'found' if back else 'missing'}"
@@ -155,11 +156,11 @@ def checks(mp4: Path, ctx: dict, dur: float) -> list[dict]:
         share, mid = (f[1] - f[0]) / c["w"], ((f[0] + f[1]) / 2 - c["x"]) / c["w"]
         seen.append(f"{share:.0%} wide at {mid:.0%}")
         hit += FACE_MIN_W <= share <= FACE_MAX_W and 0.25 <= mid <= 0.75
-    add("zoom_face", "fail", hit >= 2,
+    add("zoom_face", hit >= 2,
         "" if hit >= 2 else f"Inside the zoom a big, centred face shows in only {hit} of {len(times)} frames "
         f"({'; '.join(seen)}; needs 30-115% of the width, centred): the face is cut off, small or not there. Look "
         'at the QA sheet; give "cam" by hand, or remove "zoom".')
-    add("zoom_sharp", "warn", z["upscale"] <= SOFT_UPSCALE,
+    add("zoom_sharp", z["upscale"] <= SOFT_UPSCALE,
         "" if z["upscale"] <= SOFT_UPSCALE else f"The webcam is blown up {z['upscale']:.1f}x for the zoom (tiny "
         'webcam): the face may look mushy. If it does on the QA sheet, remove "zoom" from this moment.')
     return out

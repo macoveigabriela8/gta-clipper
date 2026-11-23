@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import burned, overlays, qc, zoom
+from . import burned, edges, overlays, qc, zoom
 from .frames import video_info
 from .paths import FPS, H, W, ffmpeg, log, run, save, setting
 
@@ -26,8 +26,9 @@ def _even(v: float) -> int:
 
 
 def fit_cam(cam: dict | None, sw: int, sh: int) -> dict | None:
-    """The cam box (source pixels) reshaped to the band's 1080:740 shape without stretching: grow it a little
-    when it's close, otherwise trim the long side. None when the box is unusable."""
+    """The cam box (source pixels) reshaped to the band's 1080:740 shape without stretching, by trimming its long
+    side around its centre. Never grown past the box: outside it is the webcam's border or the game. None when the box
+    is unusable."""
     if not cam:
         return None
     try:
@@ -41,17 +42,9 @@ def fit_cam(cam: dict | None, sw: int, sh: int) -> dict | None:
     aspect = W / CAM_H
     cx, cy = x + w / 2, y + h / 2
     if w / h < aspect:
-        grown = h * aspect
-        if grown / w <= 1.15 and grown <= sw:
-            w = grown
-        else:
-            h = w / aspect
+        h = w / aspect
     else:
-        grown = w / aspect
-        if grown / h <= 1.15 and grown <= sh:
-            h = grown
-        else:
-            w = h * aspect
+        w = h * aspect
     w, h = _even(min(w, sw)), _even(min(h, sh))
     x0 = _even(min(max(0.0, cx - w / 2), sw - w))
     y0 = _even(min(max(0.0, cy - h / 2), sh - h))
@@ -94,26 +87,31 @@ def _post_text(hook: str, caption: str) -> str:
     return "\n\n".join(p for p in parts if p) + "\n"
 
 
-def game_box(sw: int, sh: int, cam_on: bool, cam_raw: dict | None, keep: float = 1.0) -> dict:
-    """The gameplay window of the source: the right shape for the layout, off the facecam, and above any
-    burned-in subtitles (only the top `keep` share of the source's height is used)."""
-    usable = _even(sh * max(0.5, min(1.0, keep)))
-    return cover_box(sw, usable, W, GAME_H if cam_on else H, avoid=cam_raw)
+def game_box(sw: int, sh: int, cam_on: bool, cam_raw: dict | None, keep: float = 1.0, top: float = 0.0) -> dict:
+    """The gameplay window of the source: the right shape for the layout, off the facecam, below a top letterbox bar
+    and above any burned-in subtitles or bottom bar (only the source's height from `top` to `keep` is used)."""
+    bottom = _even(sh * max(0.5, min(1.0, keep)))
+    y0 = _even(sh * max(0.0, min(burned.BAR_SHARE[1], top))) if top > 0 else 0
+    y0 = min(y0, _even(bottom - sh * 0.5))                     # at least half the height stays
+    avoid = dict(cam_raw, y=float(cam_raw["y"]) - y0) if cam_raw else None
+    g = cover_box(sw, bottom - y0, W, GAME_H if cam_on else H, avoid=avoid)
+    g["y"] += y0
+    return g
 
 
 def _graph(sw: int, sh: int, cam: dict | None, cam_raw: dict | None, dur: float, cap_input: int | None,
            hook_input: int, hook_xy: tuple[int, int], hook_s: float, audio_src: str, normalise: bool,
-           keep: float = 1.0, zoom_win: dict | None = None) -> str:
+           keep: float = 1.0, zoom_win: dict | None = None, top: float = 0.0) -> str:
     f = []
     if cam:
-        g = game_box(sw, sh, True, cam_raw, keep)
+        g = game_box(sw, sh, True, cam_raw, keep, top)
         f.append(f"[0:v]fps={FPS},split={3 if zoom_win else 2}[s1][s2]" + ("[s3]" if zoom_win else ""))
         f.append(f"[s1]crop={cam['w']}:{cam['h']}:{cam['x']}:{cam['y']},scale={W}:{CAM_H}:flags=bicubic,setsar=1[top]")
         f.append(f"[s2]crop={g['w']}:{g['h']}:{g['x']}:{g['y']},scale={W}:{GAME_H}:flags=bicubic,setsar=1[bot]")
         f.append("[top][bot]vstack=inputs=2[base]")
         cap_mid = CAM_H
     else:
-        g = game_box(sw, sh, False, None, keep)
+        g = game_box(sw, sh, False, None, keep, top)
         f.append(f"[0:v]fps={FPS},crop={g['w']}:{g['h']}:{g['x']}:{g['y']},scale={W}:{H}:flags=bicubic,setsar=1[base]")
         cap_mid = round(H * CAPTION_Y_NO_CAM)
     last = "base"
@@ -158,7 +156,8 @@ def _loudness_fix(video: Path, a: float, dur: float) -> str:
 
 
 def _render(video: Path, a: float, b: float, hook: str, words: list[dict], cam_raw: dict | None, info: dict,
-            mp4: Path, work: Path, keep: float = 1.0, hook_hold: float | None = None, moment: dict | None = None) -> dict:
+            mp4: Path, work: Path, keep: float = 1.0, hook_hold: float | None = None, moment: dict | None = None,
+            top: float = 0.0) -> dict:
     dur = b - a
     sw, sh = info["w"], info["h"]
     cam = fit_cam(cam_raw, sw, sh)
@@ -182,7 +181,8 @@ def _render(video: Path, a: float, b: float, hook: str, words: list[dict], cam_r
         audio_src, normalise = f"{idx}:a", None
         idx += 1
     avoid = {k: float(cam_raw[k]) for k in ("x", "y", "w", "h")} if cam else None
-    graph = _graph(sw, sh, cam, avoid, dur, cap_input, hook_input, (hx, hy), hook_s, audio_src, normalise, keep, zoom_win)
+    graph = _graph(sw, sh, cam, avoid, dur, cap_input, hook_input, (hx, hy), hook_s, audio_src, normalise, keep, zoom_win,
+                   top)
     cmd += ["-filter_complex", graph, "-map", "[vout]", "-map", "[aout]", "-t", f"{dur:.3f}",
             "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
             "-profile:v", "high", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
@@ -277,22 +277,6 @@ def _trim_silence(video: Path, a: float, b: float, quiet_db: float = -50.0) -> t
     return a + lead, b - tail, "Trimmed " + " and ".join(parts) + ".", problem
 
 
-def _snap_to_words(words: list[dict], a: float, b: float, dur: float) -> tuple[float, float, str]:
-    """Never start or end inside a word: an edge that lands in one moves out to that word's edge (at most 1.5 s)."""
-    na, nb = a, b
-    for w in words or []:
-        try:
-            ws, we = float(w["start"]), float(w["end"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if ws < a < we - 0.03 and a - ws <= 1.5:
-            na = min(na, max(0.0, ws - 0.12))
-        if ws + 0.03 < b < we and we - b <= 1.5:
-            nb = max(nb, min(dur or we + 0.2, we + 0.2))
-    moved = [f"{x}" for x, d in (("start", a - na), ("end", nb - b)) if d > 0.01]
-    return na, nb, ("Moved the " + " and ".join(moved) + " so no word is cut in half.") if moved else ""
-
-
 def _scene_cuts(video: Path, a: float, b: float, cam: dict | None) -> tuple[list[float], bool]:
     """Hard cuts between a and b (video seconds). With a facecam we watch only the webcam box: a webcam only jumps
     when a compilation switches to the next streamer (or the stream zooms it). Without one, the whole picture with a
@@ -327,28 +311,53 @@ def _off_the_cuts(cuts: list[float], a: float, b: float) -> tuple[float, float, 
     return na, nb, ("Moved the " + " and ".join(moved) + " off a hard cut (another clip or a zoom).") if moved else ""
 
 
-def _keep_share(video: Path, a: float, b: float, words: list[dict], cam: dict | None, info: dict,
-                moment: dict) -> tuple[float, str]:
-    """How much of the source's height the gameplay may use, so the game's subtitles and the stream's own caption
-    bars stay out of the Short (our captions would double them). "drop_bottom" on the moment or in settings:
-    "auto" (find them), or a share 0-0.3 to cut by hand."""
-    forced = moment.get("drop_bottom", setting("drop_bottom"))
-    if forced not in (None, "", "auto"):
-        try:
-            cut = max(0.0, min(burned.MAX_CUT, float(forced)))
-            return 1.0 - cut, (f"Cut the bottom {cut:.0%} of the game (set by hand)." if cut else "")
-        except (TypeError, ValueError):
-            pass
+def _share(v, most: float) -> float | None:
+    """A share set by hand on the moment (0..most), or None for "auto"."""
+    if v in (None, "", "auto"):
+        return None
+    try:
+        return max(0.0, min(most, float(v)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _game_area(video: Path, a: float, b: float, words: list[dict], cam: dict | None, info: dict,
+               moment: dict) -> tuple[float, float, list[str]]:
+    """(top, keep, notes): the part of the source's height the gameplay may use, from `top` to `keep` (shares).
+    Leaves out the game's subtitles and the stream's caption bars at the bottom (our captions would double them) and
+    black letterbox bars at the top and bottom (cutscenes). "drop_bottom" / "drop_top" on the moment or in settings:
+    "auto" (found here), or a share to cut by hand (bottom 0-0.3, top 0-0.2)."""
     sw, sh = info["w"], info["h"]
     fitted = fit_cam(cam, sw, sh)
     avoid = {k: float(cam[k]) for k in ("x", "y", "w", "h")} if fitted else None
     g = game_box(sw, sh, bool(fitted), avoid)
-    found = burned.find(video, a, b, g["x"] / sw, (g["x"] + g["w"]) / sw, words)
-    keep = burned.keep_share(found)
-    if keep >= 0.999:
-        return 1.0, ""
-    return keep, (f"Cut the bottom {1 - keep:.0%} of the game: it carries subtitles or stream captions "
-                  f"(seen in {found['frames']} of {found['of']} frames), so only our captions show.")
+    seen = burned.look(video, a, b, g["x"] / sw, (g["x"] + g["w"]) / sw, words)
+    subs, bars = seen["subs"], seen["bars"]
+    notes = []
+    hand_bottom = _share(moment.get("drop_bottom", setting("drop_bottom")), burned.MAX_CUT)
+    if hand_bottom is not None:
+        keep = 1.0 - hand_bottom
+        if hand_bottom:
+            notes.append(f"Cut the bottom {hand_bottom:.0%} of the game (set by hand).")
+    else:
+        keep = burned.keep_share(subs)
+        if keep < 0.999:
+            notes.append(f"Cut the bottom {1 - keep:.0%} of the game: it carries subtitles or stream captions "
+                         f"(seen in {subs['frames']} of {subs['of']} frames, room for {burned.MAX_LINES} lines), "
+                         "so only our captions show.")
+        if bars["bottom"] and 1.0 - bars["bottom"] < keep:
+            keep = round(1.0 - bars["bottom"], 3)
+            notes.append(f"Cut a black bar at the bottom ({bars['bottom']:.0%} of the height).")
+    hand_top = _share(moment.get("drop_top", setting("drop_top")), burned.BAR_SHARE[1])
+    if hand_top is not None:
+        top = hand_top
+        if top:
+            notes.append(f"Cut the top {top:.0%} of the game (set by hand).")
+    else:
+        top = bars["top"]
+        if top:
+            notes.append(f"Cut a black bar at the top ({top:.0%} of the height, a cutscene's letterbox).")
+    return top, keep, notes
 
 
 def build_short(video: Path, a: float, b: float, hook: str, caption: str, words: list[dict], cam: dict | None,
@@ -378,27 +387,38 @@ def build_short(video: Path, a: float, b: float, hook: str, caption: str, words:
             a, b, trim_note, silence_problem = _trim_silence(video, a, b)
             if trim_note:
                 notes.append(trim_note)
-        a, b, snap_note = _snap_to_words(words, a, b, info["dur"])
+        a, b, snap_note = edges.snap(words, a, b, info["dur"])
         if snap_note:
             notes.append(snap_note)
         cuts, cuts_on_cam = _scene_cuts(video, a, b, fit_cam(cam, info["w"], info["h"]) and cam)
-        a, b, cut_note = _off_the_cuts(cuts, a, b)
+        na, nb, cut_note = _off_the_cuts(cuts, a, b)
         if cut_note:
             notes.append(cut_note)
+            # moving off a cut can land inside a word: snap again, never back across the cut
+            na, nb, again = edges.snap(words, na, nb, info["dur"], lo=na if na > a else None, hi=nb if nb < b else None)
+            if again:
+                notes.append(again)
+        a, b = na, nb
         result["seconds"] = round(b - a, 2)
         result["a"], result["b"] = round(a, 2), round(b, 2)
-        keep, keep_note = _keep_share(video, a, b, words, cam, info, moment or {})
-        if keep_note:
-            notes.append(keep_note)
-        result["keep"] = keep
+        top, keep, area_notes = _game_area(video, a, b, words, cam, info, moment or {})
+        notes.extend(area_notes)
+        result["keep"], result["top"] = keep, top
         rep = None                                          # format 5: the payoff again, slowed (replay.py)
         with tempfile.TemporaryDirectory(prefix="gtaclip-") as tmp:
             made = _render(video, a, b, hook, words, cam, info, mp4, Path(tmp), keep, (moment or {}).get("hook_hold"),
-                           moment)
+                           moment, top)
             if (moment or {}).get("replay"):
-                rep = replay.add(video, mp4, a, b, moment, cam, info, keep, Path(tmp))
+                rep = replay.add(video, mp4, a, b, moment, cam, info, keep, Path(tmp), top)
         if cam and not made["cam"]:
             notes.append("The facecam box didn't fit the video, so the gameplay fills the whole height.")
+        cam_in_game = 0.0
+        if made["cam"]:                                      # how much of the game crop is the webcam (qc: game_clear)
+            raw = {k: float(cam[k]) for k in ("x", "y", "w", "h")}
+            g = game_box(info["w"], info["h"], True, raw, keep, top)
+            ox = max(0.0, min(g["x"] + g["w"], raw["x"] + raw["w"]) - max(g["x"], raw["x"]))
+            oy = max(0.0, min(g["y"] + g["h"], raw["y"] + raw["h"]) - max(g["y"], raw["y"]))
+            cam_in_game = round(ox * oy / (g["w"] * g["h"]), 4)
         if info["has_audio"]:
             level_note = _settle_loudness(mp4)
             if level_note:
@@ -407,7 +427,7 @@ def build_short(video: Path, a: float, b: float, hook: str, caption: str, words:
         ctx = {"a": a, "b": b, "words": words, "hook": hook, "cam": bool(made["cam"]), "source_dur": info["dur"],
                "moment": moment or {}, "silence_problem": silence_problem,
                "cuts": [c for c in cuts if a + 0.3 < c < b - 0.3], "cuts_on_cam": cuts_on_cam,
-               "zoom": made.get("zoom"), "zoom_note": made.get("zoom_note"), "replay": rep}
+               "zoom": made.get("zoom"), "zoom_note": made.get("zoom_note"), "replay": rep, "cam_in_game": cam_in_game}
         want = b - a if rep is None else rep["main_s"] + rep.get("replay_s", 0.0)   # real lengths of both parts
         result["seconds"] = round(want, 2)
         ok, qc_notes, measured, checks = qc.check(mp4, want, setting("max_short_s"), ctx)

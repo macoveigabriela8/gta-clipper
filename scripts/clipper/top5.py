@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from . import overlays, qc, render
+from . import edges, overlays, qc, render
 from .frames import grab_frames, video_info
 from .paths import FPS, ffmpeg, log, run, save, seconds, setting, slug
 
@@ -21,6 +21,9 @@ APART_S = 1.0               # pieces never share seconds of the video: at least 
 PILL_MATCH = 0.7            # share of the pill's pixels that must look like the pill on the finished Short
 WHOOSH_UNDER = (8.0, 10.0)  # the whoosh at each rank change sits this many dB under the game (aim: the middle)
 WHOOSH_RISE, WHOOSH_FALL = 0.15, 0.3   # it swells for 0.15 s, is loudest right on the cut, then dies in 0.3 s
+HOOK_WORDS = (3, 8)         # short enough to sit on one line above "#5 ..."
+# judged on each piece's own render: every piece has its own cam crop and game crop
+PER_PIECE = ("webcam", "cam_border", "game_clear", "one_clip", "no_black_bars")
 
 
 def pill_text(rank: int, label: str, hook: str = "") -> str:
@@ -76,21 +79,21 @@ def _pill_shows(mp4: Path, piece: dict, work: Path) -> float:
 
 def checks(items: list[dict], pieces: list[dict], words: list[dict], hook: str, total: float,
            mp4: Path, work: Path, whoosh: dict | None = None) -> list[dict]:
-    """The countdown's own rules, in qc.py's shape."""
+    """The countdown's own rules (levels in qc.RULES)."""
     out: list[dict] = []
-    add = lambda cid, level, ok, say: out.append({"check": cid, "level": level, "pass": bool(ok), "say": say})
+    add = lambda cid, ok, say="": out.append(qc.result(cid, ok, say))
 
     ranks = sorted(int(i.get("rank", 0)) for i in items)
-    add("ranks", "fail", ranks == [1, 2, 3, 4, 5],
+    add("ranks", ranks == [1, 2, 3, 4, 5],
         f"The ranks are {ranks}: a Top 5 needs exactly 5, 4, 3, 2 and 1, each once.")
 
     bad = [f"#{p['rank']} is {p['b'] - p['a']:.1f} s" for p in pieces
            if not PIECE_S[0] <= p["b"] - p["a"] <= PIECE_S[1]]
-    add("item_length", "fail", not bad, "; ".join(bad) + f" (each piece {PIECE_S[0]:.0f}-{PIECE_S[1]:.0f} s).")
+    add("item_length", not bad, "; ".join(bad) + f" (each piece {PIECE_S[0]:.0f}-{PIECE_S[1]:.0f} s).")
 
     by_time = sorted(pieces, key=lambda p: p["a"])
     close = [f"#{p['rank']} and #{q['rank']}" for p, q in zip(by_time, by_time[1:]) if q["a"] - p["b"] < APART_S]
-    add("items_apart", "fail", not close,
+    add("items_apart", not close,
         "These pieces share seconds of the video (or sit under 1 s apart): " + ", ".join(close) +
         ". Each piece must be its own moment.")
 
@@ -105,44 +108,38 @@ def checks(items: list[dict], pieces: list[dict], words: list[dict], hook: str, 
             pay_bad.append(f"#{p['rank']}'s payoff ({pay:.1f} s) is outside it ({p['a']:.1f}-{p['b']:.1f})")
         elif not PAYOFF_AFTER[0] <= p["b"] - pay <= PAYOFF_AFTER[1]:
             pay_bad.append(f"#{p['rank']} ends {p['b'] - pay:.1f} s after its payoff")
-    add("item_payoff", "fail", not pay_bad,
+    add("item_payoff", not pay_bad,
         "; ".join(pay_bad) + f" (end each piece {PAYOFF_AFTER[0]}-{PAYOFF_AFTER[1]:.0f} s after its payoff).")
 
     shown = {p["rank"]: _pill_shows(mp4, p, work) for p in pieces}
     hidden = [f"#{r} ({s:.0%})" for r, s in shown.items() if s < PILL_MATCH]
-    add("badge_visible", "fail", not hidden,
+    add("badge_visible", not hidden,
         "The rank pill isn't clearly on screen for " + ", ".join(hidden) + ". Look at the QA sheet.")
 
     max_s = float(setting("max_short_s") or 59)
-    add("total_length", "warn", total <= max_s + 0.01,
+    add("total_length", total <= max_s + 0.01,
         f"It's {total:.1f} s: over {max_s:.0f} s is too long for YouTube Shorts. Shorten a piece.")
 
     wordy = [f"#{p['rank']} \"{p['label']}\"" for p in pieces if not 2 <= len(str(p["label"]).split()) <= 4]
-    add("labels", "warn", not wordy, "Labels should be 2-4 words: " + ", ".join(wordy) + ".")
+    add("labels", not wordy, "Labels should be 2-4 words: " + ", ".join(wordy) + ".")
 
     cut = []
-    for p in pieces:
-        for w in words or []:
-            try:
-                ws, we = float(w["start"]), float(w["end"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if (ws < p["a"] - 0.03 and we > p["a"] + 0.05) or (ws < p["b"] - 0.05 and we > p["b"] + 0.03):
-                cut.append(f"#{p['rank']} (\"{str(w.get('w', '')).strip()}\")")
-                break
-    add("item_edges", "warn", not cut, "A word is cut in half at the edge of " + ", ".join(cut) + ".")
+    for p in pieces:                                   # the same rule the edge snap uses (edges.py)
+        hit = next((w for w in edges.cut_words(words, p["a"], p["b"]) if w is not None), None)
+        if hit is not None:
+            cut.append(f"#{p['rank']} (\"{hit.strip()}\")")
+    add("item_edges", not cut, "A word is cut in half at the edge of " + ", ".join(cut) + ".")
 
     if whoosh is not None:
         under, n = whoosh.get("under"), whoosh.get("n", 0)
         good = n == len(pieces) - 1 and under is not None and WHOOSH_UNDER[0] <= under <= WHOOSH_UNDER[1]
-        add("whoosh", "warn", good,
+        add("whoosh", good,
             "No whoosh in the mix." if under is None else
             f"{n} whooshes for {len(pieces) - 1} rank changes, {under:.1f} dB under the game "
             f"(want one per change, {WHOOSH_UNDER[0]:.0f}-{WHOOSH_UNDER[1]:.0f} dB under).")
 
-    hw = hook.split()
-    plain = 3 <= len(hw) <= 8 and "#" not in hook and not any(ord(c) >= 0x2600 and c != "…" for c in hook)
-    add("hook", "warn", plain, f'The hook "{hook}" should be 3-8 plain words (no emoji, no hashtags).')
+    add("hook", qc.plain_hook(hook, HOOK_WORDS),
+        f'The hook "{hook}" should be {HOOK_WORDS[0]}-{HOOK_WORDS[1]} plain words (no emoji, no hashtags).')
     return out
 
 
@@ -190,13 +187,13 @@ def build(video: Path, plan: dict, words: list[dict], cam_for, out_dir: Path) ->
                 if not Path(made["mp4"]).exists():
                     raise RuntimeError(f"#{rank} couldn't be made: " + " ".join(made.get("notes") or []))
                 notes += [f"#{rank}: {x}" for x in made.get("notes") or [] if not x.startswith(("✗", "!"))]
-                # the webcam is judged per piece: each piece has its own cam crop, so across the joined Short the
-                # band "changes background" at every cut even when it's the right face
-                cam_say = [c["say"] for c in made.get("qa") or [] if c["check"] == "webcam" and not c["pass"]]
+                # the webcam and one_clip are judged per piece: each piece has its own cam crop, so across the joined
+                # Short the band "changes background" (and jumps) at every rank change even when it's the right face
+                own = {c["check"]: c for c in made.get("qa") or [] if c["check"] in PER_PIECE}
                 d = video_info(Path(made["mp4"]))["dur"]
                 pieces.append({"rank": rank, "label": str(it.get("label", "")), "payoff_at": it.get("payoff_at"),
                                "a": float(made.get("a", a)), "b": float(made.get("b", b)), "t0": t, "t1": t + d,
-                               "text": text, "mp4": made["mp4"], "cam_say": cam_say,
+                               "text": text, "mp4": made["mp4"], "own": own,
                                "cam": render.fit_cam(cam, src["w"], src["h"]) is not None})
                 t += d
             # the whoosh: measured against the pieces' own loudness, then set WHOOSH_UNDER's middle below it
@@ -217,12 +214,14 @@ def build(video: Path, plan: dict, words: list[dict], cam_for, out_dir: Path) ->
                 notes.append(level)
             render._cover(mp4, jpg, render.COVER_AT)
             ok, qc_notes, measured, found = qc.check(mp4, t, setting("max_short_s"), {"top5": True, "cam": False})
-            if any(p["cam"] for p in pieces):
-                bad = [f"#{p['rank']}: {p['cam_say'][0]}" for p in pieces if p["cam"] and p["cam_say"]]
-                found.append({"check": "webcam", "level": "fail", "pass": not bad, "say": " ".join(bad)})
+            for cid in PER_PIECE:
+                judged = [p for p in pieces if cid in p["own"]]
+                if judged:
+                    bad = [f"#{p['rank']}: {p['own'][cid]['say']}" for p in judged if not p["own"][cid]["pass"]]
+                    found.append(qc.result(cid, not bad, " ".join(bad)))
             found += checks(items, pieces, words, hook, video_info(mp4)["dur"], mp4, work, whoosh)
         ok = all(c["pass"] for c in found if c["level"] == "fail")
-        notes += [("✗ " if c["level"] == "fail" else "! ") + c["say"] for c in found if not c["pass"] and c["say"]]
+        notes += qc.notes_of(found)
         result.update(ok=ok, qa=found, seconds=round(t, 2), lufs=measured.get("lufs"),
                       pieces=[{k: p[k] for k in ("rank", "label", "a", "b", "t0", "t1")} for p in pieces])
         result["qa_sheet"] = str(qa_sheet(mp4, out_dir / f"{name}_qa.jpg", pieces))

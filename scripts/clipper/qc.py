@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import burned, zoom
+from . import burned, edges, zoom
 from .frames import grab_frames, video_info
 from .paths import H, W, ffmpeg, seconds
 
@@ -26,6 +26,43 @@ MIN_WORDS_PER_S = 0.5     # under this the captions are mostly empty: the stream
 PAYOFF_GAP = (0.3, 4.5)   # end this many seconds after the payoff
 CAM_BAND = 740            # facecam band height in the Short
 SENTENCE_END = (".", "?", "!", "…")
+BORDER_MARGIN = 0.05      # cam_border: a frame line this close to the band's edge...
+BORDER_SHARE = 0.85       # ...running along 85%+ of it, fixed over the frames
+MOMENT_S = (15.0, 45.0)   # a single moment's main part lasts this long
+HOOK_WORDS = (3, 10)      # a single Short's hook (5-9 reads best); a Top 5's hook: top5.HOOK_WORDS
+
+# Every check and its ONE level: "fail" (✗, fix before anyone sees it) or "warn" (!, worth a look). Every module
+# writes its checks through result(), so a check can't be ✗ in one place and ! in another, and
+# reference/cutting-sop.md must say the same (tests/test_rules.py reads the SOP and compares).
+RULES = {
+    # the file
+    "plays": "fail", "length": "fail", "size": "fail", "shorts_length": "warn",
+    # the sound
+    "sound": "fail", "loudness": "fail", "peak": "warn", "silence": "fail",
+    # the picture
+    "black": "fail", "frozen": "fail", "no_double_captions": "fail", "no_black_bars": "fail",
+    "webcam": "fail", "cam_border": "warn", "game_clear": "fail", "one_clip": "fail", "bright_enough": "warn",
+    # the cut (single moments)
+    "payoff": "fail", "link_end": "fail", "link_start": "warn", "clean_start": "warn", "clean_end": "warn",
+    "moment_length": "warn", "talking": "warn", "hook": "warn",
+    # Top 5 (top5.py)
+    "ranks": "fail", "item_length": "fail", "items_apart": "fail", "item_payoff": "fail", "badge_visible": "fail",
+    "total_length": "warn", "labels": "warn", "item_edges": "warn", "whoosh": "warn",
+    # reaction zoom (zoom.py)
+    "zoom": "warn", "zoom_window": "fail", "zoom_face": "fail", "zoom_sharp": "warn",
+    # instant replay (replay.py)
+    "replay_length": "fail", "replay_matches": "fail", "replay_badge": "fail",
+}
+
+
+def result(cid: str, ok, say: str = "") -> dict:
+    """One check's result. The sentence is only kept when it failed (a passing check says nothing)."""
+    return {"check": cid, "level": RULES[cid], "pass": bool(ok), "say": "" if ok else str(say or "")}
+
+
+def notes_of(checks: list[dict]) -> list[str]:
+    """The plain sentences for what's off: ✗ for a fail, ! for a warning."""
+    return [("✗ " if c["level"] == "fail" else "! ") + c["say"] for c in checks if not c["pass"] and c["say"]]
 
 
 def _measure(mp4: Path, has_audio: bool) -> dict:
@@ -75,7 +112,20 @@ def _look_at_bands(mp4: Path, dur: float, cam: bool, skip: tuple[float, float] |
         out["face_frames"] = sum(1 for b in bands if any(whole(y, fh) for (_, y, _, fh) in _faces(b)))
         tiles = np.stack([np.asarray(b.convert("L").resize((48, 32)), dtype=float) for b in bands])
         out["change"] = round(float(np.mean(np.abs(tiles - np.median(tiles, axis=0))) / 255), 3)
+        out["border"] = _band_border(bands)
     return out
+
+
+def _band_border(bands) -> list[str]:
+    """Sides of the webcam band where a fixed straight line runs along its edge: the webcam's own border (or the
+    game around it) cut into the band because the box was a little too big."""
+    from .facecam import fixed_edges
+    vert, horz = fixed_edges(bands)
+    h, w = vert.shape
+    mx, my = max(2, int(w * BORDER_MARGIN)), max(2, int(h * BORDER_MARGIN))
+    cols, rows = vert.mean(axis=0), horz.mean(axis=1)
+    sides = {"left": cols[1:mx], "right": cols[w - mx:w - 1], "top": rows[1:my], "bottom": rows[h - my:h - 1]}
+    return [side for side, v in sides.items() if v.size and float(v.max()) >= BORDER_SHARE]
 
 
 def _words_in(words: list[dict], a: float, b: float) -> list[dict]:
@@ -92,35 +142,28 @@ def _words_in(words: list[dict], a: float, b: float) -> list[dict]:
 def _cut_checks(ctx: dict, dur: float) -> list[dict]:
     """The editor's checks: whole words, the ending on a payoff, not the end of somebody else's clip, people talk."""
     out = []
-    add = lambda cid, level, ok, say: out.append({"check": cid, "level": level, "pass": bool(ok), "say": say})
+    add = lambda cid, ok, say="": out.append(result(cid, ok, say))
     a, b = float(ctx.get("a", 0)), float(ctx.get("b", dur))
     words, moment = ctx.get("words") or [], ctx.get("moment") or {}
 
-    timed = []
-    for w in words:
-        try:
-            timed.append((float(w["start"]), float(w["end"]), str(w.get("w", ""))))
-        except (KeyError, TypeError, ValueError):
-            continue
-    cut_start = [t for t in timed if t[0] < a - 0.03 and t[1] > a + 0.05]
-    add("clean_start", "warn", not cut_start,
-        f'Starts in the middle of the word "{cut_start[0][2]}".' if cut_start else "")
-    cut_end = [t for t in timed if t[0] < b - 0.05 and t[1] > b + 0.03]
-    if cut_end:
-        add("clean_end", "warn", False, f'Ends in the middle of the word "{cut_end[0][2]}".')
+    timed = edges.timed(words)
+    cut_start, cut_end = edges.cut_words(words, a, b)     # the same rule the edge snap uses
+    add("clean_start", cut_start is None, f'Starts in the middle of the word "{cut_start}".')
+    if cut_end is not None:
+        add("clean_end", False, f'Ends in the middle of the word "{cut_end}".')
     else:
         before = [t for t in timed if t[1] <= b + 0.05]
         after = [t for t in timed if t[0] >= b - 0.05]
         mid = (before and after and not before[-1][2].strip().endswith(SENTENCE_END)
                and after[0][0] - b < 0.6 and b - before[-1][1] < 0.8)
         tail = " ".join(t[2].strip() for t in before[-4:]) if before else ""
-        add("clean_end", "warn", not mid,
+        add("clean_end", not mid,
             f'Ends mid-sentence ("…{tail}"): the next word comes right after the cut. End after the sentence.'
             if mid else "")
 
     pay = moment.get("payoff_at")
     if pay is None:
-        add("payoff", "fail", False, 'No payoff marked. Add "payoff" (what happens) and "payoff_at" (its second in '
+        add("payoff", False, 'No payoff marked. Add "payoff" (what happens) and "payoff_at" (its second in '
             "the video) to this moment, so the Short can be checked to end on it.")
     else:
         try:
@@ -128,39 +171,47 @@ def _cut_checks(ctx: dict, dur: float) -> list[dict]:
         except (TypeError, ValueError):
             pay_s = None
         if pay_s is None:
-            add("payoff", "fail", False, f'"payoff_at" should be a second of the video, not {pay!r}.')
+            add("payoff", False, f'"payoff_at" should be a second of the video, not {pay!r}.')
         elif pay_s < a + 1:
-            add("payoff", "fail", False, f"The payoff ({pay_s:.1f} s) is before the Short starts ({a:.1f} s).")
+            add("payoff", False, f"The payoff ({pay_s:.1f} s) is before the Short starts ({a:.1f} s).")
         elif b - pay_s < PAYOFF_GAP[0]:
-            add("payoff", "fail", False, f"The Short ends before its payoff ({b - pay_s:+.1f} s). End 1-3 s after it.")
+            add("payoff", False, f"The Short ends before its payoff ({b - pay_s:+.1f} s). End 1-3 s after it.")
         elif b - pay_s > PAYOFF_GAP[1]:
-            add("payoff", "warn", False, f"It keeps going {b - pay_s:.1f} s after the payoff. End 1-3 s after it.")
+            add("payoff", False, f"It keeps going {b - pay_s:.1f} s after the payoff (the most is "
+                f"{PAYOFF_GAP[1]} s): viewers leave once the point is made. End 1-3 s after it.")
         else:
-            add("payoff", "fail", True, "")
+            add("payoff", True)
 
     src = float(ctx.get("source_dur") or 0)
     at_end = bool(src) and b >= src - 0.6
-    add("link_end", "fail", (not at_end) or bool(moment.get("end_checked")),
+    add("link_end", (not at_end) or bool(moment.get("end_checked")),
         "This Short runs to the very end of the link, so it may stop mid-scene (a clip somebody else cut). Look at "
         'the last frames on the QA sheet: if the payoff is there, add "end_checked": true to the moment; if not, ask '
         "the user for a longer link (the full stream / VOD)." if at_end else "")
-    add("link_start", "warn", not (src and src < 180 and a <= 0.3),
+    add("link_start", not (src and src < 180 and a <= 0.3),
         "It starts at the very start of the link: the setup may be missing." if src and src < 180 and a <= 0.3 else "")
+
+    add("moment_length", MOMENT_S[0] <= dur <= MOMENT_S[1],
+        f"It's {dur:.0f} s long: a Short holds best at {MOMENT_S[0]:.0f}-{MOMENT_S[1]:.0f} s. Start 3-6 s before the "
+        "setup and end 1-3 s after the payoff.")
 
     n = len(_words_in(words, a, b))
     rate = n / max(dur, 0.1)
-    add("talking", "warn", rate >= MIN_WORDS_PER_S,
+    add("talking", rate >= MIN_WORDS_PER_S,
         f"Only {n} words are said in {dur:.0f} s: the captions are mostly empty and the streamer may be quiet here "
         "(only the game is heard). A moment where the streamer reacts out loud works better."
         if rate < MIN_WORDS_PER_S else "")
 
     hook = str(ctx.get("hook") or "")
-    hw = hook.split()
-    emoji = any(ord(ch) >= 0x2600 and ch not in "…" for ch in hook)
-    add("hook", "warn", 3 <= len(hw) <= 10 and "#" not in hook and not emoji,
-        f'The hook "{hook}" should be 5-9 plain words (no emoji, no hashtags).'
-        if not (3 <= len(hw) <= 10 and "#" not in hook and not emoji) else "")
+    add("hook", plain_hook(hook, HOOK_WORDS), f'The hook "{hook}" should be {HOOK_WORDS[0]}-{HOOK_WORDS[1]} plain '
+        "words, 5-9 reads best (no emoji, no hashtags).")
     return out
+
+
+def plain_hook(hook: str, words: tuple[int, int]) -> bool:
+    """words[0]-words[1] words, no hashtag, no emoji."""
+    emoji = any(ord(ch) >= 0x2600 and ch != "…" for ch in hook)
+    return words[0] <= len(hook.split()) <= words[1] and "#" not in hook and not emoji
 
 
 def check(mp4: Path, want_s: float, max_s: float | None = None, ctx: dict | None = None
@@ -168,9 +219,9 @@ def check(mp4: Path, want_s: float, max_s: float | None = None, ctx: dict | None
     """(ok, notes, measured, checks). Notes are plain sentences, only for what's off."""
     mp4, ctx = Path(mp4), ctx or {}
     checks: list[dict] = []
-    add = lambda cid, level, ok, say: checks.append({"check": cid, "level": level, "pass": bool(ok), "say": say})
+    add = lambda cid, ok, say="": checks.append(result(cid, ok, say))
     if not mp4.exists() or mp4.stat().st_size < 10_000:
-        add("plays", "fail", False, "The Short wasn't written (file missing or empty).")
+        add("plays", False, "The Short wasn't written (file missing or empty).")
         return False, [checks[0]["say"]], {}, checks
     info = video_info(mp4)
     dur = info["dur"] or want_s
@@ -179,59 +230,74 @@ def check(mp4: Path, want_s: float, max_s: float | None = None, ctx: dict | None
                 "peak": m["peak"], "black": m["blacks"], "frozen": m["freezes"], "silent": m["silences"]}
 
     # the file
-    add("plays", "fail", m["decodes"], "" if m["decodes"] else f"The file doesn't play back cleanly: {m['tail']}")
-    add("length", "fail", abs(info["dur"] - want_s) <= DUR_TOLERANCE,
+    add("plays", m["decodes"], "" if m["decodes"] else f"The file doesn't play back cleanly: {m['tail']}")
+    add("length", abs(info["dur"] - want_s) <= DUR_TOLERANCE,
         f"It's {info['dur']:.2f} s long but should be {want_s:.2f} s.")
-    add("size", "fail", (info["w"], info["h"]) == (W, H), f"The picture is {info['w']}x{info['h']}, not {W}x{H}.")
+    add("size", (info["w"], info["h"]) == (W, H), f"The picture is {info['w']}x{info['h']}, not {W}x{H}.")
     if max_s and info["dur"] > float(max_s) + 0.01:
-        add("shorts_length", "warn", False, f"It's {info['dur']:.0f} s: longer than {float(max_s):.0f} s is too long "
+        add("shorts_length", False, f"It's {info['dur']:.0f} s: longer than {float(max_s):.0f} s is too long "
             "for YouTube Shorts (fine for TikTok).")
 
     # the sound
     if not info["has_audio"]:
-        add("sound", "fail", False, "There's no sound track.")
+        add("sound", False, "There's no sound track.")
     elif m["lufs"] is None or m["lufs"] == float("-inf") or m["lufs"] < -60:
-        add("sound", "fail", False, "The sound is silent." if m["lufs"] is not None else "Couldn't measure the sound.")
+        add("sound", False, "The sound is silent." if m["lufs"] is not None else "Couldn't measure the sound.")
     else:
-        add("sound", "fail", True, "")
-        add("loudness", "fail", abs(m["lufs"] - TARGET_LUFS) <= LUFS_TOLERANCE,
+        add("sound", True)
+        add("loudness", abs(m["lufs"] - TARGET_LUFS) <= LUFS_TOLERANCE,
             f"Loudness is {m['lufs']:.1f} LUFS; it should be about {TARGET_LUFS:.0f}.")
         if m["peak"] is not None:
-            add("peak", "warn", m["peak"] <= PEAK_MAX, f"Peaks hit {m['peak']:.1f} dB: it may crackle on phones.")
+            add("peak", m["peak"] <= PEAK_MAX, f"Peaks hit {m['peak']:.1f} dB: it may crackle on phones.")
     long_quiet = [(s, d) for s, d in m["silences"] if d >= SILENCE_MAX_S and 0.3 < s and s + d < dur - 0.3]
     problem = str(ctx.get("silence_problem") or "")
-    add("silence", "fail", not long_quiet and not problem,
+    add("silence", not long_quiet and not problem,
         problem or ("Nearly silent for " + ", ".join(f"{d:.1f} s at {s:.1f} s" for s, d in long_quiet) +
                     " (dead air). Move the window to skip it, or split it into two moments."))
 
     # the picture
     blacks = [(s, d) for s, d in m["blacks"] if d > BLACK_MAX_S]
-    add("black", "fail", not blacks, "; ".join(f"Black for {d:.1f} s from {s:.1f} s." for s, d in blacks))
-    add("frozen", "fail", not m["freezes"],
+    add("black", not blacks, "; ".join(f"Black for {d:.1f} s from {s:.1f} s." for s, d in blacks))
+    add("frozen", not m["freezes"],
         "; ".join(f"The picture stands still for {d:.1f} s from {s:.1f} s (frozen stream or a pause menu)."
                   for s, d in m["freezes"]))
     left = burned.left_in_short(mp4, dur, zoom.skip(ctx))
-    add("no_double_captions", "fail", left is None,
+    add("no_double_captions", left is None,
         f"Text still shows low in the gameplay ({left['frames']} of {left['of']} frames, at {left['top']:.0%} of the "
         'height): game subtitles or stream captions next to ours. Set "drop_bottom" on this moment (e.g. 0.25).'
         if left else "")
+    if not ctx.get("top5"):                  # (a Top 5 judges it per piece: each has its own layout)
+        bars = burned.bars_in_short(mp4, dur, CAM_BAND if ctx.get("cam") else 0, zoom.skip(ctx))
+        where = " and ".join(f"{side} ({bars[side]:.0%})" for side in ("top", "bottom") if bars and bars[side])
+        add("no_black_bars", bars is None,
+            f"A black bar shows at the {where} of the gameplay in {bars['frames'] if bars else 0} frames (a "
+            'cutscene\'s letterbox). Set "drop_top" (e.g. 0.12) or "drop_bottom" on this moment.')
     look = _look_at_bands(mp4, dur, bool(ctx.get("cam")), zoom.skip(ctx))
     of = look.get("of") or 0
     if ctx.get("cam") and of:
         hit, change = look["face_frames"], look["change"]
         good = hit >= max(3, round(0.5 * of)) and change <= 0.12
-        add("webcam", "fail", good,
+        add("webcam", good,
             f"The top band may not show the streamer's whole face (a whole face in {hit} of {of} frames, background "
             f"change {change:.2f}): a game scene, a zoomed webcam or the face cut off. Look at the QA sheet; if it "
             'is not the webcam, set "facecam": false on the moment (or give "cam" by hand).' if not good else "")
+        border = look.get("border") or []
+        add("cam_border", not border,
+            f"A straight frame line runs along the {' and '.join(border)} of the webcam band: the webcam's border "
+            'or a strip of the game shows. Look at the QA sheet; give a slightly smaller "cam" by hand.')
+    if ctx.get("cam"):
+        inside = float(ctx.get("cam_in_game") or 0.0)
+        add("game_clear", inside <= 0.01,
+            f"{inside:.0%} of the gameplay picture is the webcam (the game crop overlaps it), so the face shows twice. "
+            'Give "cam" by hand (the whole webcam), or set "facecam": false.')
     if of:
-        add("bright_enough", "warn", look["dark_frames"] <= of // 2,
+        add("bright_enough", look["dark_frames"] <= of // 2,
             f"The gameplay is very dark in {look['dark_frames']} of {of} frames: hard to see on a phone."
             if look["dark_frames"] > of // 2 else "")
     measured["bands"] = look
     cuts = [round(c - float(ctx.get("a", 0)), 1) for c in ctx.get("cuts") or []]
     if ctx.get("cuts_on_cam"):
-        add("one_clip", "fail", not cuts,
+        add("one_clip", not cuts,
             f"The webcam jumps at {', '.join(f'{c:.1f} s' for c in cuts)}: another streamer's clip or a zoom starts "
             "inside the Short. Stay inside one clip (end before it, or start after it)." if cuts else "")
 
@@ -243,8 +309,7 @@ def check(mp4: Path, want_s: float, max_s: float | None = None, ctx: dict | None
         from . import replay
         checks += replay.checks(mp4, ctx["replay"])
     ok = all(c["pass"] for c in checks if c["level"] == "fail")
-    notes = [("✗ " if c["level"] == "fail" else "! ") + c["say"] for c in checks if not c["pass"] and c["say"]]
-    return ok, notes, measured, checks
+    return ok, notes_of(checks), measured, checks
 
 
 def qa_sheet(mp4: Path, out_jpg: Path, dur: float, a: float = 0.0) -> Path:
